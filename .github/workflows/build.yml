@@ -75,6 +75,8 @@ jobs:
             convert build/icon.png -resize ${size}x${size} $dir/ic_launcher_round.png
             convert build/icon.png -resize ${size}x${size} $dir/ic_launcher_foreground.png
           done
+      - name: Plugin voor externe speler toevoegen
+        run: cp native/android/*.java android/app/src/main/java/nl/endless/kijkdoos/
       - run: npx cap sync android
       - name: APK bouwen
         working-directory: android

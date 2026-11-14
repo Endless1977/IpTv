@@ -104,6 +104,21 @@
       <input id="setProxy" placeholder="http://192.168.1.10:8090/proxy?url=">
     </div>
 
+    <h3>Externe speler</h3>
+    <label class="toggle"><input type="checkbox" id="setExtAlways"><span>Altijd afspelen in de externe speler<small>Anders kies je per titel via “↗”.</small></span></label>
+    <div id="extAndroid">
+      <select id="setExtApp" class="sel"></select>
+      <input id="setExtPkg" placeholder="Pakketnaam, bijv. org.videolan.vlc" hidden>
+    </div>
+    <div id="extWin">
+      <div class="two"><input id="setWinPath" placeholder="C:\Program Files\VideoLAN\VLC\vlc.exe"><button class="btn" id="btnWinBrowse" type="button">Bladeren…</button></div>
+      <p class="hint" id="winFound"></p>
+      <input id="setWinArgs" placeholder="Extra opties (optioneel), bijv. --fullscreen {url}">
+      <p class="hint"><code>{url}</code> en <code>{title}</code> worden ingevuld. Leeg = standaard voor VLC, mpv, MPC en PotPlayer.</p>
+    </div>
+    <p class="hint" id="extWeb">In de browser op de computer downloadt Kijkdoos een <code>.m3u</code>-bestand dat opent in je standaard mediaspeler (bijv. VLC). Met de Windows-app start je de speler direct.</p>
+    <button class="btn" id="btnExtTest" type="button">Test externe speler</button>
+
     <h3>Onderhoud</h3>
     <button class="btn" id="btnRecheck">Beschikbaarheid opnieuw controleren</button>
     <p class="hint" id="envInfo"></p>

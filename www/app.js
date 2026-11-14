@@ -57,6 +57,7 @@ const state = {
   subStatus: {},                       // sub.id -> {ok, msg}
 };
 if (!Array.isArray(state.settings.langs)) state.settings.langs = [];
+state.settings.ext = Object.assign({ always: false, app: 'chooser', pkg: '', winPath: '', winArgs: '' }, state.settings.ext || {});
 for (const b of BUILTIN) if (!(b.id in state.settings.builtin)) state.settings.builtin[b.id] = b.on;
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -528,7 +529,13 @@ function cardHTML(it) {
 // fallback als een thumbnail niet laadt
 document.addEventListener('error', e => {
   const img = e.target;
-  if (img.tagName !== 'IMG' || !img.closest('.thumb')) return;
+  if (img.tagName !== 'IMG') return;
+  if (img.id === 'dPoster') { if (!/icon-512/.test(img.src)) { img.src = 'icons/icon-512.png'; img.style.objectFit = 'contain'; } return; }
+  if (img.closest('.hero')) {
+    const ph = document.createElement('div'); ph.className = 'hero-ph'; ph.innerHTML = placeholder(img.closest('.hero').querySelector('h1').textContent);
+    img.replaceWith(ph); const bg = $('.hero .bg'); if (bg) bg.style.backgroundImage = 'none'; return;
+  }
+  if (!img.closest('.thumb')) return;
   const th = img.closest('.thumb'); img.remove();
   th.insertAdjacentHTML('afterbegin', placeholder(th.dataset.title || '?'));
   th.closest('.card') && th.closest('.card').classList.remove('logo');
@@ -677,19 +684,12 @@ async function openDetail(it) {
   const acts = $('#dActions'); acts.innerHTML = '';
   d.hidden = false;
 
-  const addPlay = (url, label = '▶ Afspelen', title = it.title) => {
-    const b = document.createElement('button'); b.className = 'btn primary'; b.textContent = label;
-    b.onclick = () => play(url, title, it); acts.appendChild(b);
-    extraActions(url);
-  };
-  const extraActions = url => {
-    const c = document.createElement('button'); c.className = 'btn'; c.textContent = 'Kopieer link';
-    c.onclick = () => navigator.clipboard.writeText(url).then(() => toast('Link gekopieerd — plak in VLC'), () => prompt('Stream-URL', url));
-    acts.appendChild(c);
-    if (/Android/i.test(navigator.userAgent) && !ENV.cap) {
-      const a = document.createElement('a'); a.className = 'btn'; a.textContent = 'Open in VLC';
-      a.href = `intent:${url}#Intent;package=org.videolan.vlc;type=video/*;end`; acts.appendChild(a);
-    }
+  const btn = (label, cls, fn) => { const b = document.createElement('button'); b.className = 'btn ' + cls; b.textContent = label; b.onclick = fn; acts.appendChild(b); };
+  const addPlay = (url, title = it.title) => {
+    const ext = state.settings.ext.always;
+    btn(ext ? '▶ Afspelen in ' + extName() : '▶ Afspelen', 'primary', () => playAuto(url, title, it));
+    btn(ext ? 'Ingebouwde speler' : '↗ ' + extName(), '', () => (ext ? play(url, title, it) : openExternal(url, title)));
+    btn('Kopieer link', '', () => navigator.clipboard.writeText(url).then(() => toast('Link gekopieerd'), () => prompt('Stream-URL', url)));
   };
 
   if (it.archiveId) {
@@ -738,7 +738,7 @@ function episodeList(eps, it, asParts = false) {
   };
   show(seasons[0]);
   const sel = $('#seasonSel'); if (sel) sel.onchange = () => show(+sel.value);
-  box.onclick = e => { const b = e.target.closest('.ep'); if (b) play(b.dataset.url, `${it.title} — ${b.dataset.t}`, it, eps, b.dataset.url); };
+  box.onclick = e => { const b = e.target.closest('.ep'); if (b) playAuto(b.dataset.url, `${it.title} — ${b.dataset.t}`, it, eps, b.dataset.url); };
 }
 
 // ---------- Speler ----------
@@ -772,10 +772,75 @@ function play(url, title, it, eps, cur) {
 }
 function fail(it, url, text) {
   const msg = $('#pMsg'); msg.hidden = false;
-  msg.innerHTML = esc(text) + '<br><br><button class="btn" id="pCopy">Kopieer link</button>';
+  msg.innerHTML = esc(text) + `<br><br><button class="btn primary" id="pExt">↗ Open in ${esc(extName())}</button> <button class="btn" id="pCopy">Kopieer link</button>`;
   $('#pCopy').onclick = () => navigator.clipboard.writeText(url).then(() => toast('Link gekopieerd'));
+  $('#pExt').onclick = () => { const t = $('#pTitle').textContent; stopPlayback(); openExternal(url, t); };
   if (it && it.kind === 'live' && it.statusKey) { setStatus(it.statusKey, 'dead'); scheduleRender(); }
 }
+// ---------- Externe speler ----------
+const ANDROID_PLAYERS = [
+  ['chooser', 'Vraag elke keer (kiezer)', ''], ['vlc', 'VLC', 'org.videolan.vlc'], ['mx', 'MX Player', 'com.mxtech.videoplayer.ad'],
+  ['mxpro', 'MX Player Pro', 'com.mxtech.videoplayer.pro'], ['just', 'Just Player', 'com.brouken.player'], ['mpv', 'mpv', 'is.xyz.mpv'],
+  ['kodi', 'Kodi', 'org.xbmc.kodi'], ['tivimate', 'TiviMate', 'ar.tvplayer.tv'], ['custom', 'Andere app (pakketnaam)…', ''],
+];
+const isAndroid = /Android/i.test(navigator.userAgent);
+const extMode = () => (ENV.cap || isAndroid ? 'android' : ENV.electron ? 'windows' : 'web');
+function androidPkg() {
+  const e = state.settings.ext;
+  if (e.app === 'custom') return e.pkg.trim();
+  return (ANDROID_PLAYERS.find(p => p[0] === e.app) || ANDROID_PLAYERS[0])[2];
+}
+function extName() {
+  const e = state.settings.ext, m = extMode();
+  if (m === 'android') return e.app === 'custom' ? (e.pkg || 'externe app') : e.app === 'chooser' ? 'externe app' : (ANDROID_PLAYERS.find(p => p[0] === e.app) || [, 'externe app'])[1];
+  if (m === 'windows') return e.winPath ? e.winPath.split(/[\\/]/).pop().replace(/\.exe$/i, '').replace(/^vlc$/i, 'VLC') : 'externe speler';
+  return 'externe speler';
+}
+const extPlugin = () => window.Capacitor && ((window.Capacitor.Plugins || {}).ExternalPlayer ||
+  (window.Capacitor.registerPlugin && window.Capacitor.registerPlugin('ExternalPlayer')));
+
+function playAuto(url, title, it, eps, cur) {
+  if (state.settings.ext.always) openExternal(url, title); else play(url, title, it, eps, cur);
+}
+
+async function openExternal(url, title = '') {
+  const m = extMode();
+  if (m === 'android' && ENV.cap) {
+    const pkg = androidPkg(), plug = extPlugin();
+    if (!plug) return toast('Externe speler niet beschikbaar in deze versie');
+    try { await plug.open({ url, title, package: pkg }); }
+    catch (e) {
+      if (pkg && /NOT_INSTALLED|niet ge/i.test((e && (e.code || e.message)) || '')) {
+        if (confirm(`${extName()} is niet geïnstalleerd. Openen in de Play Store?`)) plug.openStore({ package: pkg }).catch(() => {});
+      } else toast('Kon externe speler niet openen');
+    }
+    return;
+  }
+  if (m === 'android') { // browser op Android: intent-link
+    const u = new URL(url), pkg = androidPkg();
+    location.href = `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${u.protocol.replace(':', '')};type=video/*;` +
+      (pkg ? `package=${pkg};` : '') + `S.title=${encodeURIComponent(title)};end`;
+    return;
+  }
+  if (m === 'windows' && window.kdNative) {
+    let path = state.settings.ext.winPath;
+    if (!path) {
+      const found = await window.kdNative.detectPlayers().catch(() => []);
+      if (found.length) { path = state.settings.ext.winPath = found[0].path; saveSettings(); }
+    }
+    if (!path) { toast('Kies eerst een externe speler bij ⚙ Instellingen'); renderSettings(); $('#settings').hidden = false; return; }
+    const r = await window.kdNative.openPlayer({ path, args: state.settings.ext.winArgs, url, title }).catch(e => ({ ok: false, msg: e.message }));
+    if (!r.ok) toast('Openen mislukt: ' + (r.msg || 'onbekende fout'), 4000); else toast('Geopend in ' + extName());
+    return;
+  }
+  // Browser op de computer: playlistbestand downloaden, opent in je standaard mediaspeler (bijv. VLC)
+  const blob = new Blob([`#EXTM3U\n#EXTINF:-1,${title}\n${url}\n`], { type: 'audio/x-mpegurl' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = (title || 'stream').replace(/[\\/:*?"<>|]+/g, ' ').slice(0, 80) + '.m3u'; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  toast('Playlist gedownload — open hem met VLC of je standaardspeler', 4000);
+}
+
 function stopPlayback(hide = true) {
   const v = $('#video');
   if (hls) { hls.destroy(); hls = null; }
@@ -794,6 +859,15 @@ $('#pClose').onclick = () => stopPlayback();
 function renderSettings() {
   $('#setShowAll').checked = !!state.settings.showAll;
   $('#setProxy').value = state.settings.proxy || '';
+  const e = state.settings.ext, m = extMode();
+  $('#setExtAlways').checked = !!e.always;
+  $('#extAndroid').hidden = m !== 'android'; $('#extWin').hidden = m !== 'windows'; $('#extWeb').hidden = m !== 'web';
+  $('#setExtApp').innerHTML = ANDROID_PLAYERS.map(([id, n]) => `<option value="${id}" ${e.app === id ? 'selected' : ''}>${esc(n)}</option>`).join('');
+  $('#setExtPkg').hidden = e.app !== 'custom'; $('#setExtPkg').value = e.pkg || '';
+  $('#setWinPath').value = e.winPath || ''; $('#setWinArgs').value = e.winArgs || '';
+  if (m === 'windows' && window.kdNative) window.kdNative.detectPlayers().then(list => {
+    $('#winFound').innerHTML = list.length ? 'Gevonden: ' + list.map(p => `<button class="linkbtn" data-wp="${esc(p.path)}">${esc(p.name)}</button>`).join(' · ') : 'Geen bekende speler gevonden — kies zelf een .exe.';
+  }).catch(() => {});
   $('#webOnly').hidden = ENV.native;
   $('#builtinList').innerHTML = BUILTIN.map(b => `<label class="toggle"><input type="checkbox" data-b="${b.id}" ${state.settings.builtin[b.id] ? 'checked' : ''}>
     <span>${esc(b.name)}<small>${esc(b.desc)}</small></span></label>`).join('');
@@ -812,6 +886,11 @@ $('#settings').addEventListener('change', e => {
   const t = e.target;
   if (t.id === 'setShowAll') { state.settings.showAll = t.checked; saveSettings(); render(); }
   if (t.dataset.b) { state.settings.builtin[t.dataset.b] = t.checked; saveSettings(); reloadSoon(); }
+  if (t.id === 'setExtAlways') { state.settings.ext.always = t.checked; saveSettings(); }
+  if (t.id === 'setExtApp') { state.settings.ext.app = t.value; saveSettings(); renderSettings(); }
+  if (t.id === 'setExtPkg') { state.settings.ext.pkg = t.value.trim(); saveSettings(); }
+  if (t.id === 'setWinPath') { state.settings.ext.winPath = t.value.trim().replace(/^"|"$/g, ''); saveSettings(); }
+  if (t.id === 'setWinArgs') { state.settings.ext.winArgs = t.value; saveSettings(); }
   if (t.id === 'setProxy') { state.settings.proxy = t.value.trim(); saveSettings(); reloadSoon(); }
   if (t.name === 'stype') document.querySelectorAll('#subForm [data-for]').forEach(d => (d.hidden = d.dataset.for !== t.value));
 });
@@ -842,6 +921,15 @@ $('#subForm').addEventListener('submit', e => {
   document.querySelectorAll('#subForm [data-for]').forEach(d => (d.hidden = d.dataset.for !== 'xtream'));
   loadSub(sub); toast('Abonnement toegevoegd — wordt gecontroleerd');
 });
+$('#settings').addEventListener('click', e => {
+  const wp = e.target.closest('[data-wp]');
+  if (wp) { state.settings.ext.winPath = wp.dataset.wp; saveSettings(); renderSettings(); }
+});
+$('#btnWinBrowse').onclick = async () => {
+  if (!window.kdNative) return;
+  const p = await window.kdNative.browsePlayer(); if (p) { state.settings.ext.winPath = p; saveSettings(); renderSettings(); }
+};
+$('#btnExtTest').onclick = () => openExternal('https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8', 'Kijkdoos testbeeld');
 $('#btnRecheck').onclick = () => { state.avail = {}; LS.set('avail', {}); archiveCache.clear(); loadAll(); toast('Alles wordt opnieuw gecontroleerd'); };
 let reloadT; function reloadSoon() { clearTimeout(reloadT); reloadT = setTimeout(loadAll, 600); }
 
@@ -854,7 +942,7 @@ document.addEventListener('click', e => {
   const more = e.target.closest('.more');
   if (more) { openGrid(state.rows.find(r => r.id === more.dataset.row)); return; }
   const c = e.target.closest('[data-uid]');
-  if (c) { const it = itemIndex.get(c.dataset.uid); if (it) it.kind === 'live' && it.url ? play(it.url, it.title, it) : openDetail(it); }
+  if (c) { const it = itemIndex.get(c.dataset.uid); if (it) it.kind === 'live' && it.url ? playAuto(it.url, it.title, it) : openDetail(it); }
 });
 $('#tabs').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
