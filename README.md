@@ -1,7 +1,9 @@
+<img src="www/img/wapen.png" alt="Endless" width="90" align="right">
+
 # 📺 Kijkdoos — IPTV voor Android, Windows en web
 
 Gratis films, series en live tv op één plek, plus je eigen IPTV-abonnementen.
-Alleen streams die echt werken worden getoond; de rest blijft verborgen (aan te zetten via ⚙).
+Standaard laadt Kijkdoos alleen de actuele index (snel, niets bewaard). Zet *Streams controleren* aan (⚙) om alleen te testen wat in beeld is — wat niet werkt verdwijnt dan.
 
 **Web-versie:** https://endless1977.github.io/IpTv/
 **Downloads (Android .apk / Windows .exe):** [Releases → latest](https://github.com/Endless1977/IpTv/releases/latest)
@@ -14,7 +16,7 @@ Alleen streams die echt werken worden getoond; de rest blijft verborgen (aan te 
 - **Abonnementen:** Xtream Codes (server + gebruikersnaam + wachtwoord) of een M3U-link.
   Films, series (met seizoenen/afleveringen) en zenders worden automatisch ingedeeld.
   Een verlopen of niet-werkend abonnement toont niets.
-- **Beschikbaarheidscheck:** elke stream wordt op de achtergrond getest; resultaten worden 6 uur onthouden.
+- **Realtime controle (aan/uit):** alleen kaarten die in beeld zijn worden getest; geen voorladen en geen cache op het apparaat.
 - **Taalfilter** (🌐): kies één of meer talen; ook abonnementen worden herkend aan labels als `NL |`, `[DE]`, `UK:`
 - **Externe speler:** speel af in VLC, MX Player, Just Player, mpv, Kodi of TiviMate (Android) of in VLC, mpv, MPC-HC/BE, PotPlayer of elk ander programma (Windows). Kies per titel “↗” of zet *Altijd extern afspelen* aan.
 - Zoeken, detailpagina's, automatisch volgende aflevering, "Kopieer link".

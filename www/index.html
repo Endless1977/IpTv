@@ -11,8 +11,9 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div id="splash"><img src="img/wapen.png" alt="Endless"><div>Kijkdoos</div></div>
 <header class="topbar">
-  <div class="brand"><img src="icons/icon-192.png" alt=""><span>Kijkdoos</span></div>
+  <div class="brand"><img src="img/wapen.png" alt="Endless" class="crest"><span>Kijkdoos</span></div>
   <nav class="tabs" id="tabs">
     <button data-tab="film" class="active">Films</button>
     <button data-tab="series">Series</button>
@@ -76,7 +77,7 @@
     <h2>Instellingen</h2>
 
     <h3>Weergave</h3>
-    <label class="toggle"><input type="checkbox" id="setShowAll"><span>Toon ook onbeschikbare / niet-gecontroleerde streams</span></label>
+    <label class="toggle"><input type="checkbox" id="setScan"><span>Streams controleren<small>Aan: alleen wat in beeld is wordt getest; wat niet werkt verdwijnt. Uit: alleen de index laden (snelst).</small></span></label>
 
     <h3>Gratis bronnen</h3>
     <div id="builtinList"></div>
@@ -120,8 +121,13 @@
     <button class="btn" id="btnExtTest" type="button">Test externe speler</button>
 
     <h3>Onderhoud</h3>
-    <button class="btn" id="btnRecheck">Beschikbaarheid opnieuw controleren</button>
+    <button class="btn" id="btnRecheck">Index opnieuw laden</button>
     <p class="hint" id="envInfo"></p>
+
+    <div class="about">
+      <img src="img/wapen.png" alt="Wapen van Endless">
+      <div><strong>Kijkdoos</strong><br>Een Endless-productie<br><a href="https://github.com/Endless1977/IpTv" target="_blank" rel="noopener">github.com/Endless1977/IpTv</a></div>
+    </div>
   </div>
 </div>
 

@@ -50,13 +50,14 @@ const ARCHIVE_ROWS = {
 const state = {
   tab: 'film',
   q: '',
-  settings: LS.get('settings', { showAll: false, proxy: '', builtin: {}, langs: [] }),
+  settings: LS.get('settings', { scan: false, proxy: '', builtin: {}, langs: [] }),
   subs: LS.get('subs', []),
-  avail: LS.get('avail', {}),          // url -> {s:'ok'|'reach'|'dead', t}
   rows: [],                            // {id, tab, title, items:[], more?:fn, src}
   subStatus: {},                       // sub.id -> {ok, msg}
 };
 if (!Array.isArray(state.settings.langs)) state.settings.langs = [];
+if (!('scan' in state.settings)) state.settings.scan = false;
+if (state.settings.langs.length) setTimeout(() => applyIptvLangs(), 0);
 state.settings.ext = Object.assign({ always: false, app: 'chooser', pkg: '', winPath: '', winArgs: '' }, state.settings.ext || {});
 for (const b of BUILTIN) if (!(b.id in state.settings.builtin)) state.settings.builtin[b.id] = b.on;
 
@@ -64,8 +65,7 @@ const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const saveSettings = () => LS.set('settings', state.settings);
 const saveSubs = () => LS.set('subs', state.subs);
-let availDirty = false;
-setInterval(() => { if (availDirty) { availDirty = false; LS.set('avail', state.avail); } }, 3000);
+try { localStorage.removeItem('kd.avail'); } catch {} // oude cache opruimen
 
 function toast(msg, ms = 2600) {
   const t = $('#toast'); t.textContent = msg; t.hidden = false;
@@ -190,53 +190,44 @@ function playableStatus(s, url) {
 }
 
 // ---------- Item-beschikbaarheid ----------
-const TTL = { ok: 6 * 3600e3, reach: 6 * 3600e3, dead: 1 * 3600e3 };
-function cachedStatus(key) {
-  const a = state.avail[key];
-  if (a && Date.now() - a.t < TTL[a.s]) return a.s;
-  return null;
-}
-function setStatus(key, s) { state.avail[key] = { s, t: Date.now() }; availDirty = true; }
-
+// Realtime: alleen kaarten die in beeld zijn worden gecontroleerd, en niets wordt op het apparaat bewaard.
+const avail = new Map();            // statusKey -> {s, t}; alleen tijdens deze sessie
+const FRESH = 10 * 60e3;            // na 10 minuten opnieuw controleren
+function setStatus(key, s) { avail.set(key, { s, t: Date.now() }); }
 /** status van een item: 'ok' | 'dead' | null (nog onbekend) */
 function itemStatus(it) {
   if (it.status) return it.status;
-  if (it.statusKey) {
-    const s = cachedStatus(it.statusKey);
-    if (s) return playableStatus(s, it.url || '') ? 'ok' : 'dead';
-  }
+  const a = it.statusKey && avail.get(it.statusKey);
+  if (a && Date.now() - a.t < FRESH) return playableStatus(a.s, it.url || '') ? 'ok' : 'dead';
   return null;
 }
-const visible = it => state.settings.showAll || itemStatus(it) === 'ok';
+const scanOn = () => !!state.settings.scan;
+const visible = it => !scanOn() || itemStatus(it) !== 'dead';
 
-// Wachtrij met beperkte gelijktijdigheid
-const queue = { list: [], running: 0, max: 6, done: 0, total: 0, seen: new Set() };
-function enqueue(it, front = false) {
-  if (!it.check || itemStatus(it) || queue.seen.has(it.uid)) return;
-  queue.seen.add(it.uid); queue.total++;
-  front ? queue.list.unshift(it) : queue.list.push(it);
-  pump();
+// Wachtrij: nieuwste (zojuist in beeld) eerst, max 4 tegelijk
+const queue = { list: [], running: 0, max: 4, queued: new Set() };
+function enqueue(it) {
+  if (!scanOn() || !it.check || itemStatus(it) || queue.queued.has(it.uid)) return;
+  queue.queued.add(it.uid); queue.list.unshift(it); pump();
 }
+function dequeue(it) {
+  if (!queue.queued.has(it.uid) || it._running) return;
+  queue.queued.delete(it.uid); queue.list = queue.list.filter(x => x !== it); updateStatus();
+}
+function clearQueue() { for (const it of queue.list) queue.queued.delete(it.uid); queue.list = []; updateStatus(); }
 function pump() {
   while (queue.running < queue.max && queue.list.length) {
-    const it = queue.list.shift();
-    queue.running++;
-    it.check().then(s => {
-      if (it.statusKey) setStatus(it.statusKey, s); else it.status = s;
-    }).catch(() => { if (it.statusKey) setStatus(it.statusKey, 'dead'); else it.status = 'dead'; })
-      .finally(() => { queue.running--; queue.done++; scheduleRender(); updateStatus(); pump(); });
+    const it = queue.list.shift(); queue.running++; it._running = true;
+    it.check().catch(() => 'dead').then(s => { if (it.statusKey) setStatus(it.statusKey, s); else it.status = s; })
+      .finally(() => { it._running = false; queue.running--; queue.queued.delete(it.uid); onStatus(it); pump(); });
   }
   updateStatus();
 }
 function updateStatus() {
-  const el = $('#status');
-  const busy = queue.running > 0 || queue.list.length > 0;
-  const loading = loaders.size > 0;
-  if (!busy && !loading) { el.innerHTML = ''; queue.done = queue.total = 0; return; }
-  const parts = [];
-  if (loading) parts.push('Bronnen laden…');
-  if (busy) parts.push(`Streams controleren ${queue.done}/${queue.total}`);
-  el.innerHTML = '<span class="dot"></span>' + parts.join(' · ');
+  const n = queue.running + queue.list.length, parts = [];
+  if (loaders.size) parts.push('Index laden…');
+  if (n) parts.push(`${n} in beeld controleren`);
+  $('#status').innerHTML = parts.length ? '<span class="dot"></span>' + parts.join(' · ') : '';
 }
 
 // ---------- M3U ----------
@@ -290,12 +281,20 @@ async function track(name, fn) { loaders.add(name); updateStatus(); try { return
 
 function addRow(row) {
   state.rows = state.rows.filter(r => r.id !== row.id);
+  row.ver = (row.ver || 0) + 1;
   state.rows.push(row);
-  for (const it of row.items) if (row.tab === state.tab) enqueue(it);
   scheduleRender();
 }
 
-let iptvLangMap = null;
+let iptvLangMap = null, iptvLangsApplied = false;
+/** Taal-index van iptv-org pas ophalen wanneer je op taal gaat filteren */
+function applyIptvLangs() {
+  if (iptvLangsApplied) return; iptvLangsApplied = true;
+  track('Taal-index', () => iptvLangs()).then(m => {
+    for (const r of state.rows) if (r.src.startsWith('iptv-')) for (const it of r.items) { const l = m.get(it.url); if (l) it.langs = uniq(l); }
+    viewKey = ''; render();
+  });
+}
 function iptvLangs() {
   if (!iptvLangMap) iptvLangMap = http('https://iptv-org.github.io/iptv/index.language.m3u', { timeout: 45000 }).then(t => {
     const m = new Map();
@@ -305,9 +304,9 @@ function iptvLangs() {
   return iptvLangMap;
 }
 async function loadBuiltinM3U(b) {
-  const [text, lmap] = await Promise.all([http(b.url), iptvLangs()]);
-  const entries = parseM3U(text);
-  const items = entries.map(e => { const it = liveItem(e, b.tab, b.id, b.name); const l = lmap.get(e.url); if (l) it.langs = uniq(l); return it; });
+  const entries = parseM3U(await http(b.url));
+  const items = entries.map(e => liveItem(e, b.tab, b.id, b.name));
+  if (iptvLangsApplied) iptvLangs().then(m => items.forEach(it => { const l = m.get(it.url); if (l) it.langs = uniq(l); }));
   const title = { film: 'Live filmkanalen', series: 'Live seriekanalen', live: 'Gratis zenders' }[b.tab];
   addRow({ id: b.id, tab: b.tab, title: `${title} · ${b.name.split('· ')[1]}`, items, src: b.id });
 }
@@ -371,7 +370,7 @@ async function loadArchive(tab, srcId) {
       const fresh = docs.filter(d => !seen.has(d.identifier)).map(d => archiveItem(d, tab));
       row.items.push(...fresh);
       row.done = docs.length < 40;
-      for (const it of fresh) enqueue(it);
+      row.ver = (row.ver || 0) + 1;
       scheduleRender();
     };
     try { await row.more(); addRow(row); } catch (e) { console.warn('archive', title, e); }
@@ -407,20 +406,13 @@ async function loadM3USub(sub) {
     put(tab, g, { uid: uid(), kind: tab === 'film' ? 'film' : 'series', tab, src: sub.id, srcName: sub.name, sub: true,
       title: name, poster: e.attrs['tvg-logo'] || '', url: e.url, group: g, langs: entryLangs(e) });
   }
-  // Steekproef per groep: werken een paar streams, dan is de groep beschikbaar.
   for (const [k, items] of groups) {
     const [tab, g] = k.split('\u0001');
-    const urlOf = it => it.url || (it.episodes && it.episodes[0] && it.episodes[0].url);
-    const gkey = `grp:${sub.id}:${k}`;
-    const samples = items.slice(0, 3).map(urlOf).filter(Boolean);
-    const gate = { uid: uid(), statusKey: gkey, url: samples[0] || '',
-      check: async () => { for (const u of samples) { const s = await probe(u); if (playableStatus(s, u)) return 'ok'; } return 'dead'; } };
-    for (const it of items) { if (tab !== 'live') { it.statusKey = gkey; it.url = it.url || samples[0]; } }
-    const row = { id: `${sub.id}-${k}`, tab, title: `${g}`, items, src: sub.id, sub: true };
-    if (tab === 'live') row.items.forEach(it => { it.check = () => probe(it.url); });
-    else row.gate = gate;
-    addRow(row);
-    if (tab === state.tab && row.gate) enqueue(row.gate);
+    for (const it of items) {
+      if (!it.url && it.episodes) it.url = it.episodes[0].url;
+      if (!it.check) { it.statusKey = it.url; it.check = () => probe(it.url); }
+    }
+    addRow({ id: `${sub.id}-${k}`, tab, title: g, items, src: sub.id, sub: true });
   }
   return `${entries.length} streams`;
 }
@@ -485,7 +477,7 @@ async function loadSub(sub) {
 }
 
 async function loadAll() {
-  state.rows = []; queue.list = []; queue.seen.clear();
+  state.rows = []; clearQueue(); viewKey = '';
   const jobs = [];
   for (const b of BUILTIN) {
     if (!state.settings.builtin[b.id]) continue;
@@ -501,7 +493,7 @@ async function loadAll() {
 let renderPending = false;
 function scheduleRender() {
   if (renderPending) return; renderPending = true;
-  setTimeout(() => { renderPending = false; render(); }, 250);
+  setTimeout(() => { renderPending = false; render(); }, 300);
 }
 
 const COLORS = ['#ff7a1a', '#7a5cff', '#1ac8ff', '#ff4f8b', '#3ccf7a', '#ffb347'];
@@ -514,13 +506,13 @@ function placeholder(title) {
 
 function cardHTML(it) {
   const st = itemStatus(it);
-  const wide = it.kind === 'live';
-  const img = it.poster ? `<img loading="lazy" src="${esc(it.poster)}" alt="">` : '';
-  return `<button class="card${wide ? ' wide' : ''}${it.logo ? ' logo' : ''}" data-uid="${it.uid}">
+  const checking = scanOn() && !st && it.check;
+  const img = it.poster ? `<img loading="lazy" decoding="async" src="${esc(it.poster)}" alt="">` : '';
+  return `<button class="card${it.kind === 'live' ? ' wide' : ''}${it.logo ? ' logo' : ''}${checking ? ' checking' : ''}" data-uid="${it.uid}">
     <div class="thumb" data-title="${esc(it.title)}">${img || placeholder(it.title)}
       ${it.kind === 'live' ? '<span class="badge live">LIVE</span>' : ''}
       ${it.sub ? '<span class="badge sub">ABO</span>' : ''}
-      ${st !== 'ok' ? `<span class="badge unk">${st === 'dead' ? 'offline' : 'niet gecontroleerd'}</span>` : ''}
+      ${checking ? '<span class="badge unk chk">controleren…</span>' : st === 'dead' ? '<span class="badge unk">offline</span>' : ''}
     </div>
     <div class="t">${esc(it.title)}</div>
     <div class="s">${esc([it.year, it.kind === 'series' && it.episodes ? it.episodes.length + ' afl.' : '', it.srcName].filter(Boolean).join(' · '))}</div>
@@ -542,79 +534,126 @@ document.addEventListener('error', e => {
 }, true);
 
 const itemIndex = new Map();
-function rowVisibleItems(row) {
-  if (row.gate && !state.settings.showAll) {
-    const s = itemStatus(row.gate);
-    if (s !== 'ok') return [];
-  }
-  return row.items.filter(it => row.gate ? true : visible(it));
-}
 const langOk = it => { const sel = state.settings.langs || []; return !sel.length || (it.langs || ['und']).some(l => sel.includes(l)); };
 const matches = it => langOk(it) && (!state.q || it.title.toLowerCase().includes(state.q));
-
+const rowItems = r => r.items.filter(it => visible(it) && matches(it));
 const rank = r => (r.sub ? 0 : r.src.startsWith('archive') ? 1 : 2);
+
+// Alleen wat in beeld komt wordt getekend en (als controle aan staat) gecontroleerd.
+const cardIO = new IntersectionObserver(entries => {
+  for (const e of entries) {
+    const it = itemIndex.get(e.target.dataset.uid); if (!it) continue;
+    e.isIntersecting ? enqueue(it) : dequeue(it);
+  }
+}, { rootMargin: '40px' });
+const rowIO = new IntersectionObserver(entries => {
+  for (const e of entries) if (e.isIntersecting && e.target._rec && !e.target._rec.shown) showMore(e.target._rec);
+}, { rootMargin: '300px 0px' });
+function observeCards(box) { box.querySelectorAll('.card:not([data-o])').forEach(c => { c.dataset.o = 1; cardIO.observe(c); }); }
+
+const CHUNK = 20;
+const rowRecs = new Map();
+let viewKey = '', heroUid = null;
+function makeRowRec(r) {
+  const el = document.createElement('section'); el.className = 'row'; el.dataset.id = r.id;
+  el.innerHTML = `<div class="row-head"><h2>${esc(r.title)}</h2><span class="count"></span><button class="more" data-row="${esc(r.id)}">Alles ›</button></div><div class="strip"></div>`;
+  const rec = { r, el, strip: $('.strip', el), list: [], shown: 0, ver: -1 };
+  el._rec = rec; rowIO.observe(el);
+  return rec;
+}
+function showMore(rec, n = CHUNK) {
+  const slice = rec.list.slice(rec.shown, rec.shown + n); if (!slice.length) return false;
+  rec.strip.insertAdjacentHTML('beforeend', slice.map(cardHTML).join(''));
+  rec.shown += slice.length; observeCards(rec.strip);
+  return true;
+}
+const countText = rec => `${rec.list.length}${rec.r.more && !rec.r.done ? '+' : ''}`;
+
+/** Status van één item veranderd: alleen die kaart(en) bijwerken, niets opnieuw tekenen. */
+function onStatus(it) {
+  const st = itemStatus(it);
+  document.querySelectorAll(`.card[data-uid="${it.uid}"]`).forEach(c => {
+    if (st === 'dead' && scanOn()) {
+      const rowEl = c.closest('.row'), rec = rowEl && rowEl._rec;
+      c.remove();
+      if (rec) {
+        const i = rec.list.indexOf(it); if (i >= 0) { rec.list.splice(i, 1); rec.shown--; }
+        $('.count', rec.el).textContent = countText(rec);
+        if (rec.shown < CHUNK) showMore(rec, 1);
+        if (!rec.list.length) rec.el.hidden = true;
+      }
+    } else {
+      c.classList.remove('checking');
+      const b = c.querySelector('.chk'); if (b) b.remove();
+    }
+  });
+}
+
 function render() {
   itemIndex.clear();
   for (const r of state.rows) for (const it of r.items) itemIndex.set(it.uid, it);
-  // tabbladen
   const hasLive = state.rows.some(r => r.tab === 'live');
   $('#tabs [data-tab=live]').hidden = !hasLive;
   if (state.tab === 'live' && !hasLive) state.tab = 'film';
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === state.tab));
 
-  const rows = state.rows.filter(r => r.tab === state.tab)
-    .sort((a, b) => rank(a) - rank(b));
   const rowsEl = $('#rows');
-  const scrolls = {}; rowsEl.querySelectorAll('.row').forEach(r => (scrolls[r.dataset.id] = $('.strip', r).scrollLeft));
-
-  let html = '', total = 0, hero = null;
-  for (const r of rows) {
-    const items = rowVisibleItems(r).filter(matches);
-    if (!items.length) continue;
-    total += items.length;
-    if (!hero) hero = items.find(i => i.kind !== 'live' && i.poster) || null;
-    const shown = items.slice(0, 40);
-    html += `<section class="row" data-id="${esc(r.id)}">
-      <div class="row-head"><h2>${esc(r.title)}</h2><span class="count">${items.length}${r.more && !r.done ? '+' : ''}</span>
-      <button class="more" data-row="${esc(r.id)}">Alles ›</button></div>
-      <div class="strip">${shown.map(cardHTML).join('')}</div></section>`;
+  const key = [state.tab, state.q, (state.settings.langs || []).join(), scanOn()].join('|');
+  if (key !== viewKey) { // andere weergave: alles opnieuw opbouwen
+    viewKey = key; heroUid = null; rowsEl.innerHTML = ''; rowRecs.clear();
+    cardIO.disconnect(); rowIO.disconnect(); clearQueue();
   }
-  rowsEl.innerHTML = html;
-  rowsEl.querySelectorAll('.row').forEach(r => { const s = scrolls[r.dataset.id]; if (s) $('.strip', r).scrollLeft = s; });
+  const rows = state.rows.filter(r => r.tab === state.tab).sort((a, b) => rank(a) - rank(b));
+  let prev = null, total = 0; const alive = new Set();
+  for (const r of rows) {
+    let rec = rowRecs.get(r.id);
+    if (rec && rec.r !== r) { rec.el.remove(); rec = null; }
+    if (!rec) { rec = makeRowRec(r); rowRecs.set(r.id, rec); }
+    if (rec.ver !== r.ver) { // nieuwe items in deze rij: alleen aanvullen
+      rec.ver = r.ver; rec.list = rowItems(r);
+      if (rec.shown && rec.shown < CHUNK) showMore(rec, CHUNK - rec.shown);
+    }
+    if (!rec.list.length) continue;
+    $('.count', rec.el).textContent = countText(rec);
+    rec.el.hidden = false; alive.add(r.id); total += rec.list.length;
+    const want = prev ? prev.nextSibling : rowsEl.firstChild;
+    if (want !== rec.el) rowsEl.insertBefore(rec.el, want);
+    prev = rec.el;
+  }
+  for (const [id, rec] of rowRecs) if (!alive.has(id)) { rec.el.remove(); rowRecs.delete(id); }
 
+  // uitgelicht (blijft staan zolang het item bestaat)
   const heroEl = $('#hero');
-  if (hero && !state.q) {
-    heroEl.hidden = false;
-    heroEl.innerHTML = `<div class="bg" style="background-image:url('${esc(hero.poster)}')"></div>
+  if (state.q) heroEl.hidden = true;
+  else if (!heroUid || !itemIndex.has(heroUid)) {
+    let hero = null;
+    for (const rec of rowRecs.values()) { hero = rec.list.find(i => i.kind !== 'live' && i.poster && itemStatus(i) !== 'dead'); if (hero) break; }
+    heroUid = hero ? hero.uid : null; heroEl.hidden = !hero;
+    if (hero) heroEl.innerHTML = `<div class="bg" style="background-image:url('${esc(hero.poster)}')"></div>
       <div class="inner"><img src="${esc(hero.poster)}" alt=""><div><h1>${esc(hero.title)}</h1>
       <p>${esc(hero.desc || hero.srcName || '')}</p>
-      <button class="btn primary" data-uid="${hero.uid}" data-act="open">▶ Bekijken</button></div></div>`;
-  } else heroEl.hidden = true;
+      <button class="btn primary" data-uid="${hero.uid}">▶ Bekijken</button></div></div>`;
+  }
 
   const empty = $('#empty');
   empty.hidden = total > 0;
-  if (!total) {
-    const busy = loaders.size || queue.running || queue.list.length;
-    empty.textContent = state.q ? `Niets gevonden voor “${state.q}”.` :
-      busy ? 'Even geduld — streams worden gecontroleerd. Alleen wat werkt verschijnt hier.' :
-      'Nog niets beschikbaar. Voeg een abonnement toe of zet bronnen aan via ⚙.';
-  }
-  if (!$('#gridView').hidden && gridState.row) renderGrid();
+  if (!total) empty.innerHTML = state.q ? esc(`Niets gevonden voor “${state.q}”.`) :
+    loaders.size ? '<img class="crest-sm" src="img/wapen.png" alt=""><br>Index laden…' :
+    'Nog niets beschikbaar. Voeg een abonnement toe of zet bronnen aan via ⚙.';
   renderLangs();
+  hideSplash(total > 0 || !loaders.size);
 }
 
 // ---------- Taalfilter ----------
 function renderLangs() {
   const sel = state.settings.langs;
-  const btn = $('#btnLang');
-  btn.classList.toggle('on', sel.length > 0);
+  $('#btnLang').classList.toggle('on', sel.length > 0);
   $('#langLabel').textContent = !sel.length ? 'Alle talen' : sel.length <= 2 ? sel.map(langName).join(', ') : `${sel.length} talen`;
   if ($('#langPop').hidden) return;
-  // tel beschikbare items per taal in het huidige tabblad (zonder taalfilter)
   const counts = new Map();
   for (const r of state.rows) {
     if (r.tab !== state.tab) continue;
-    for (const it of rowVisibleItems(r)) for (const l of uniq(it.langs || ['und'])) counts.set(l, (counts.get(l) || 0) + 1);
+    for (const it of r.items) if (visible(it)) for (const l of uniq(it.langs || ['und'])) counts.set(l, (counts.get(l) || 0) + 1);
   }
   for (const l of sel) if (!counts.has(l)) counts.set(l, 0);
   const pinned = ['nl', 'en'];
@@ -625,31 +664,27 @@ function renderLangs() {
 }
 let langT;
 function setLangs(langs) {
-  state.settings.langs = langs; saveSettings(); render();
-  // Internet Archive opnieuw doorzoeken in de gekozen taal
-  clearTimeout(langT);
+  state.settings.langs = langs; saveSettings(); if (langs.length) applyIptvLangs(); render();
+  clearTimeout(langT); // Internet Archive opnieuw doorzoeken in de gekozen taal
   langT = setTimeout(() => {
     state.rows = state.rows.filter(r => !r.src.startsWith('archive'));
     for (const b of BUILTIN) if (b.type === 'archive' && state.settings.builtin[b.id]) track(b.name, () => loadArchive(b.tab, b.id));
     scheduleRender();
   }, 700);
 }
-$('#btnLang').onclick = e => { e.stopPropagation(); const p = $('#langPop'); p.hidden = !p.hidden; renderLangs(); };
+$('#btnLang').onclick = e => { e.stopPropagation(); const p = $('#langPop'); p.hidden = !p.hidden; if (!p.hidden) applyIptvLangs(); renderLangs(); };
 $('#langPop').addEventListener('click', e => e.stopPropagation());
 $('#langList').addEventListener('change', () => setLangs([...document.querySelectorAll('#langList input:checked')].map(i => i.value)));
 $('#langClear').onclick = () => setLangs([]);
 document.addEventListener('click', () => { $('#langPop').hidden = true; });
 
-// lazy: start controle voor items van huidig tabblad
-function enqueueTab() { for (const r of state.rows) if (r.tab === state.tab) { if (r.gate) enqueue(r.gate, true); r.items.forEach(it => enqueue(it)); } }
-
-// horizontale strip: aan het eind meer laden (Internet Archive)
+// horizontale strip: aan het eind de volgende kaarten tekenen / meer ophalen
 document.addEventListener('scroll', e => {
   const s = e.target;
   if (!s.classList || !s.classList.contains('strip')) return;
-  if (s.scrollLeft + s.clientWidth > s.scrollWidth - 300) {
-    const row = state.rows.find(r => r.id === s.closest('.row').dataset.id);
-    loadMore(row);
+  if (s.scrollLeft + s.clientWidth > s.scrollWidth - 400) {
+    const rec = s.closest('.row')._rec;
+    if (!showMore(rec)) loadMore(rec.r);
   }
 }, true);
 async function loadMore(row) {
@@ -658,16 +693,24 @@ async function loadMore(row) {
 }
 
 // ---------- Raster ----------
-const gridState = { row: null, title: '' };
-function openGrid(row) { gridState.row = row; $('#gridTitle').textContent = row.title; $('#gridView').hidden = false; renderGrid(); }
+const gridState = { row: null, list: [], shown: 0 };
+function openGrid(row) { gridState.row = row; $('#gridTitle').textContent = row.title; $('#gridView').hidden = false; $('#gridView').scrollTop = 0; renderGrid(); }
 function renderGrid() {
-  const row = gridState.row;
-  const items = (row.virtual ? row.items.filter(visible) : rowVisibleItems(row)).filter(matches);
-  $('#grid').innerHTML = items.slice(0, 600).map(cardHTML).join('') || '<div class="empty">Niets beschikbaar.</div>';
+  gridState.list = rowItems(gridState.row); gridState.shown = 0; $('#grid').innerHTML = '';
+  if (!gridMore()) $('#grid').innerHTML = '<div class="empty">Niets beschikbaar.</div>';
 }
-$('#gridView').addEventListener('scroll', e => {
+function gridMore() {
+  const s = gridState.list.slice(gridState.shown, gridState.shown + 60); if (!s.length) return false;
+  $('#grid').insertAdjacentHTML('beforeend', s.map(cardHTML).join('')); gridState.shown += s.length; observeCards($('#grid'));
+  return true;
+}
+$('#gridView').addEventListener('scroll', async e => {
   const g = e.currentTarget;
-  if (g.scrollTop + g.clientHeight > g.scrollHeight - 600) loadMore(gridState.row);
+  if (g.scrollTop + g.clientHeight < g.scrollHeight - 600 || gridState.busy) return;
+  if (gridMore()) return;
+  gridState.busy = true;
+  await loadMore(gridState.row);
+  gridState.list = rowItems(gridState.row); gridMore(); gridState.busy = false;
 });
 
 // ---------- Detail ----------
@@ -702,7 +745,7 @@ async function openDetail(it) {
       if (it.kind === 'film' || list.length === 1) addPlay(list[0].url);
       if (list.length > 1) episodeList(list.map((f, i) => ({ season: 1, ep: i + 1, title: f.title, url: f.url })), it, it.kind === 'film');
     } catch {
-      setStatus(it.statusKey, 'dead'); scheduleRender();
+      setStatus(it.statusKey, 'dead'); onStatus(it);
       $('#dEpisodes').innerHTML = '<div class="loading">Niet (meer) beschikbaar — verborgen.</div>';
     }
   } else if (it.xtreamSeries) {
@@ -775,7 +818,7 @@ function fail(it, url, text) {
   msg.innerHTML = esc(text) + `<br><br><button class="btn primary" id="pExt">↗ Open in ${esc(extName())}</button> <button class="btn" id="pCopy">Kopieer link</button>`;
   $('#pCopy').onclick = () => navigator.clipboard.writeText(url).then(() => toast('Link gekopieerd'));
   $('#pExt').onclick = () => { const t = $('#pTitle').textContent; stopPlayback(); openExternal(url, t); };
-  if (it && it.kind === 'live' && it.statusKey) { setStatus(it.statusKey, 'dead'); scheduleRender(); }
+  if (it && it.kind === 'live' && it.statusKey) { setStatus(it.statusKey, 'dead'); onStatus(it); }
 }
 // ---------- Externe speler ----------
 const ANDROID_PLAYERS = [
@@ -857,7 +900,7 @@ $('#pClose').onclick = () => stopPlayback();
 
 // ---------- Instellingen ----------
 function renderSettings() {
-  $('#setShowAll').checked = !!state.settings.showAll;
+  $('#setScan').checked = !!state.settings.scan;
   $('#setProxy').value = state.settings.proxy || '';
   const e = state.settings.ext, m = extMode();
   $('#setExtAlways').checked = !!e.always;
@@ -884,7 +927,7 @@ function renderSettings() {
 
 $('#settings').addEventListener('change', e => {
   const t = e.target;
-  if (t.id === 'setShowAll') { state.settings.showAll = t.checked; saveSettings(); render(); }
+  if (t.id === 'setScan') { state.settings.scan = t.checked; saveSettings(); render(); toast(t.checked ? 'Controle aan — alleen wat in beeld is' : 'Controle uit — alleen de index'); }
   if (t.dataset.b) { state.settings.builtin[t.dataset.b] = t.checked; saveSettings(); reloadSoon(); }
   if (t.id === 'setExtAlways') { state.settings.ext.always = t.checked; saveSettings(); }
   if (t.id === 'setExtApp') { state.settings.ext.app = t.value; saveSettings(); renderSettings(); }
@@ -930,7 +973,7 @@ $('#btnWinBrowse').onclick = async () => {
   const p = await window.kdNative.browsePlayer(); if (p) { state.settings.ext.winPath = p; saveSettings(); renderSettings(); }
 };
 $('#btnExtTest').onclick = () => openExternal('https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8', 'Kijkdoos testbeeld');
-$('#btnRecheck').onclick = () => { state.avail = {}; LS.set('avail', {}); archiveCache.clear(); loadAll(); toast('Alles wordt opnieuw gecontroleerd'); };
+$('#btnRecheck').onclick = () => { avail.clear(); archiveCache.clear(); loadAll(); toast('Index wordt opnieuw geladen'); };
 let reloadT; function reloadSoon() { clearTimeout(reloadT); reloadT = setTimeout(loadAll, 600); }
 
 // ---------- Interactie ----------
@@ -946,7 +989,7 @@ document.addEventListener('click', e => {
 });
 $('#tabs').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
-  state.tab = b.dataset.tab; window.scrollTo(0, 0); enqueueTab(); render();
+  state.tab = b.dataset.tab; window.scrollTo(0, 0); render();
 });
 let qT; $('#q').addEventListener('input', e => { clearTimeout(qT); qT = setTimeout(() => { state.q = e.target.value.trim().toLowerCase(); render(); }, 200); });
 document.addEventListener('keydown', e => {
@@ -965,6 +1008,13 @@ if (ENV.cap && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
 }
 
 // ---------- Start ----------
+let splashGone = false;
+function hideSplash(ready) {
+  if (splashGone || !ready) return; splashGone = true;
+  const s = $('#splash'); if (!s) return;
+  setTimeout(() => { s.classList.add('out'); setTimeout(() => s.remove(), 500); }, 400);
+}
+setTimeout(() => hideSplash(true), 4000);
 if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !ENV.native) navigator.serviceWorker.register('sw.js').catch(() => {});
 window.KD = { state, parseM3U, classify, ENV }; // voor debuggen/tests
 loadAll();

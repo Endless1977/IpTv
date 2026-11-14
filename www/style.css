@@ -68,6 +68,20 @@ main{padding:6px 0 40px}
 .card .t{margin-top:6px;font-size:13px;font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .card .s{font-size:11px;color:var(--mut)}
 
+.card.checking .thumb{opacity:.55}
+.badge.chk{animation:pulse 1s infinite alternate}
+.strip:empty{min-height:250px}
+.brand .crest{width:auto;height:38px;border-radius:0}
+#splash{position:fixed;inset:0;z-index:100;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;transition:opacity .5s}
+#splash img{width:min(180px,40vw);animation:rise .8s ease-out}
+#splash div{font-weight:800;font-size:22px;letter-spacing:4px;color:var(--acc2);text-transform:uppercase}
+#splash.out{opacity:0;pointer-events:none}
+@keyframes rise{from{opacity:0;transform:translateY(12px) scale(.95)}}
+.about{display:flex;align-items:center;gap:16px;margin-top:26px;padding:14px;background:var(--bg3);border-radius:12px;font-size:13px;color:var(--mut)}
+.about img{width:72px;flex:none}
+.about strong{color:var(--fg);font-size:15px}
+.about a{color:var(--acc2)}
+.crest-sm{width:90px;opacity:.85;margin-bottom:10px}
 .empty{padding:60px 18px;text-align:center;color:var(--mut)}
 
 .overlay{position:fixed;inset:0;z-index:30;background:var(--bg);overflow:auto;padding-bottom:40px}
