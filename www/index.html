@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d14">
+<title>Kijkdoos</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><img src="icons/icon-192.png" alt=""><span>Kijkdoos</span></div>
+  <nav class="tabs" id="tabs">
+    <button data-tab="film" class="active">Films</button>
+    <button data-tab="series">Series</button>
+    <button data-tab="live" hidden>Live TV</button>
+  </nav>
+  <div class="search"><input id="q" type="search" placeholder="Zoeken…" autocomplete="off"></div>
+  <button class="iconbtn" id="btnSettings" title="Instellingen &amp; abonnementen">⚙</button>
+</header>
+
+<div class="status" id="status"></div>
+
+<main id="main">
+  <section class="hero" id="hero" hidden></section>
+  <div id="rows"></div>
+  <div class="empty" id="empty" hidden></div>
+</main>
+
+<!-- Raster (alles van één rij / zoekresultaten) -->
+<div class="overlay" id="gridView" hidden>
+  <div class="ov-head"><button class="iconbtn" data-close>←</button><h2 id="gridTitle"></h2></div>
+  <div class="grid" id="grid"></div>
+</div>
+
+<!-- Detail -->
+<div class="modal" id="detail" hidden>
+  <div class="modal-card detail">
+    <button class="iconbtn close" data-close>✕</button>
+    <div class="d-bg" id="dBg"></div>
+    <div class="d-body">
+      <img class="d-poster" id="dPoster" alt="">
+      <div class="d-info">
+        <h2 id="dTitle"></h2>
+        <div class="d-meta" id="dMeta"></div>
+        <p class="d-desc" id="dDesc"></p>
+        <div class="d-actions" id="dActions"></div>
+        <div class="episodes" id="dEpisodes"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Speler -->
+<div class="player" id="player" hidden>
+  <video id="video" controls playsinline autoplay></video>
+  <div class="p-top"><button class="iconbtn" id="pClose">✕</button><span id="pTitle"></span></div>
+  <div class="p-msg" id="pMsg" hidden></div>
+</div>
+
+<!-- Instellingen -->
+<div class="modal" id="settings" hidden>
+  <div class="modal-card settings">
+    <button class="iconbtn close" data-close>✕</button>
+    <h2>Instellingen</h2>
+
+    <h3>Weergave</h3>
+    <label class="toggle"><input type="checkbox" id="setShowAll"><span>Toon ook onbeschikbare / niet-gecontroleerde streams</span></label>
+
+    <h3>Gratis bronnen</h3>
+    <div id="builtinList"></div>
+
+    <h3>IPTV-abonnementen</h3>
+    <div id="subList"></div>
+    <form id="subForm" class="subform">
+      <div class="seg">
+        <label><input type="radio" name="stype" value="xtream" checked> Xtream Codes</label>
+        <label><input type="radio" name="stype" value="m3u"> M3U-link</label>
+      </div>
+      <input name="name" placeholder="Naam (bijv. Mijn provider)" required>
+      <div data-for="xtream">
+        <input name="server" placeholder="Server (http://provider.tv:8080)">
+        <div class="two"><input name="user" placeholder="Gebruikersnaam" autocomplete="off"><input name="pass" type="password" placeholder="Wachtwoord" autocomplete="off"></div>
+      </div>
+      <div data-for="m3u" hidden><input name="url" placeholder="M3U-URL (http://…/get.php?…)"></div>
+      <button class="btn primary" type="submit">Abonnement toevoegen</button>
+      <p class="hint">Inloggegevens blijven alleen op dit apparaat.</p>
+    </form>
+
+    <div id="webOnly">
+      <h3>CORS-proxy (alleen web-versie)</h3>
+      <p class="hint">In de browser blokkeren veel servers verzoeken van andere sites. De Android- en Windows-app hebben hier geen last van. Draai <code>proxy.py</code> (bijv. op je Pi) en vul hier het adres in.</p>
+      <input id="setProxy" placeholder="http://192.168.1.10:8090/proxy?url=">
+    </div>
+
+    <h3>Onderhoud</h3>
+    <button class="btn" id="btnRecheck">Beschikbaarheid opnieuw controleren</button>
+    <p class="hint" id="envInfo"></p>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="vendor/hls.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

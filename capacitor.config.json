@@ -1,0 +1,8 @@
+{
+  "appId": "nl.endless.kijkdoos",
+  "appName": "Kijkdoos",
+  "webDir": "www",
+  "server": { "androidScheme": "http", "cleartext": true },
+  "android": { "allowMixedContent": true },
+  "plugins": { "CapacitorHttp": { "enabled": true } }
+}
