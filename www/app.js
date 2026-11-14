@@ -50,12 +50,13 @@ const ARCHIVE_ROWS = {
 const state = {
   tab: 'film',
   q: '',
-  settings: LS.get('settings', { showAll: false, proxy: '', builtin: {} }),
+  settings: LS.get('settings', { showAll: false, proxy: '', builtin: {}, langs: [] }),
   subs: LS.get('subs', []),
   avail: LS.get('avail', {}),          // url -> {s:'ok'|'reach'|'dead', t}
   rows: [],                            // {id, tab, title, items:[], more?:fn, src}
   subStatus: {},                       // sub.id -> {ok, msg}
 };
+if (!Array.isArray(state.settings.langs)) state.settings.langs = [];
 for (const b of BUILTIN) if (!(b.id in state.settings.builtin)) state.settings.builtin[b.id] = b.on;
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -68,6 +69,82 @@ setInterval(() => { if (availDirty) { availDirty = false; LS.set('avail', state.
 function toast(msg, ms = 2600) {
   const t = $('#toast'); t.textContent = msg; t.hidden = false;
   clearTimeout(toast.h); toast.h = setTimeout(() => (t.hidden = true), ms);
+}
+
+// ---------- Talen ----------
+// code: [Nederlandse naam, ...aliassen (ISO 639-2, Engelse/eigen naam)]
+const LANGS = {
+  nl: ['Nederlands', 'dut', 'nld', 'dutch', 'nederlands', 'vlaams', 'flemish'],
+  en: ['Engels', 'eng', 'english'],
+  de: ['Duits', 'ger', 'deu', 'german', 'deutsch'],
+  fr: ['Frans', 'fre', 'fra', 'french', 'français', 'francais'],
+  es: ['Spaans', 'spa', 'spanish', 'español', 'espanol', 'castellano', 'latino'],
+  it: ['Italiaans', 'ita', 'italian', 'italiano'],
+  pt: ['Portugees', 'por', 'portuguese', 'português', 'portugues'],
+  tr: ['Turks', 'tur', 'turkish', 'türkçe', 'turkce'],
+  ar: ['Arabisch', 'ara', 'arabic', 'عربي'],
+  ru: ['Russisch', 'rus', 'russian', 'русский'],
+  pl: ['Pools', 'pol', 'polish', 'polski'],
+  uk: ['Oekraïens', 'ukr', 'ukrainian'],
+  ro: ['Roemeens', 'rum', 'ron', 'romanian', 'română'],
+  hu: ['Hongaars', 'hun', 'hungarian', 'magyar'],
+  cs: ['Tsjechisch', 'cze', 'ces', 'czech'],
+  el: ['Grieks', 'gre', 'ell', 'greek'],
+  sv: ['Zweeds', 'swe', 'swedish', 'svenska'],
+  da: ['Deens', 'dan', 'danish', 'dansk'],
+  no: ['Noors', 'nor', 'nob', 'norwegian', 'norsk'],
+  fi: ['Fins', 'fin', 'finnish', 'suomi'],
+  sr: ['Servisch', 'srp', 'serbian'],
+  hr: ['Kroatisch', 'hrv', 'croatian'],
+  bg: ['Bulgaars', 'bul', 'bulgarian'],
+  sq: ['Albanees', 'alb', 'sqi', 'albanian'],
+  fa: ['Perzisch', 'per', 'fas', 'persian', 'farsi'],
+  he: ['Hebreeuws', 'heb', 'hebrew'],
+  hi: ['Hindi', 'hin', 'hindi'],
+  ur: ['Urdu', 'urd', 'urdu'],
+  bn: ['Bengaals', 'ben', 'bengali', 'bangla'],
+  ta: ['Tamil', 'tam', 'tamil'],
+  zh: ['Chinees', 'chi', 'zho', 'chinese', 'mandarin', 'cantonese'],
+  ja: ['Japans', 'jpn', 'japanese'],
+  ko: ['Koreaans', 'kor', 'korean'],
+  th: ['Thai', 'tha', 'thai'],
+  vi: ['Vietnamees', 'vie', 'vietnamese'],
+  id: ['Indonesisch', 'ind', 'indonesian', 'bahasa'],
+  ms: ['Maleis', 'may', 'msa', 'malay'],
+  tl: ['Filipijns', 'tgl', 'fil', 'tagalog', 'filipino'],
+  zz: ['Geen (stom)', 'zxx', 'silent', 'no linguistic content'],
+};
+const LANG_ALIAS = new Map();
+for (const [code, [name, ...al]] of Object.entries(LANGS)) [code, name.toLowerCase(), ...al].forEach(a => LANG_ALIAS.set(a, code));
+// landcode -> taal (voor "NL | Films", "UK: Sky", tvg-id "NPO1.nl")
+const COUNTRY_LANG = { nl: 'nl', be: 'nl', uk: 'en', gb: 'en', us: 'en', usa: 'en', ca: 'en', au: 'en', ie: 'en', nz: 'en', en: 'en',
+  de: 'de', at: 'de', fr: 'fr', es: 'es', mx: 'es', ar: 'es', co: 'es', cl: 'es', it: 'it', pt: 'pt', br: 'pt', tr: 'tr',
+  ru: 'ru', pl: 'pl', ua: 'uk', ro: 'ro', hu: 'hu', cz: 'cs', gr: 'el', se: 'sv', dk: 'da', no: 'no', fi: 'fi', rs: 'sr',
+  hr: 'hr', bg: 'bg', al: 'sq', ir: 'fa', il: 'he', in: 'hi', pk: 'ur', cn: 'zh', hk: 'zh', tw: 'zh', jp: 'ja', kr: 'ko',
+  th: 'th', vn: 'vi', id: 'id', my: 'ms', ph: 'tl', sa: 'ar', ae: 'ar', eg: 'ar', ma: 'ar', dz: 'ar', iq: 'ar', qa: 'ar' };
+const langName = c => (c === 'und' ? 'Onbekend' : (LANGS[c] || [c])[0]);
+const normLang = v => { const k = String(v || '').trim().toLowerCase(); return LANG_ALIAS.get(k) || LANG_ALIAS.get(k.slice(0, 3)) || null; };
+const uniq = a => [...new Set(a.filter(Boolean))];
+/** Taal afleiden uit een label als "NL | Films", "[DE] Kino", "|UK| Sky", "Dutch Movies" */
+function labelLangs(...labels) {
+  for (const l of labels) {
+    if (!l) continue;
+    const m = String(l).match(/^\s*[\[|(]?\s*([A-Za-z]{2,3})\s*[\]|):\-–•]/) || String(l).match(/[|\[]\s*([A-Z]{2,3})\s*[|\]]/);
+    if (m) { const c = COUNTRY_LANG[m[1].toLowerCase()] || normLang(m[1]); if (c && m[1].length >= 2) return [c]; }
+    const words = String(l).toLowerCase().split(/[^\p{L}]+/u);
+    const hit = uniq(words.filter(w => w.length > 3).map(w => LANG_ALIAS.get(w)));
+    if (hit.length) return hit;
+  }
+  return [];
+}
+function entryLangs(e) {
+  const tl = e.attrs['tvg-language'];
+  if (tl) { const l = uniq(tl.split(/[;,]/).map(normLang)); if (l.length) return l; }
+  const fromLabel = labelLangs(e.attrs['group-title'], e.name);
+  if (fromLabel.length) return fromLabel;
+  const cc = (e.attrs['tvg-id'] || '').match(/\.([a-z]{2})(@|$)/i);
+  if (cc && COUNTRY_LANG[cc[1].toLowerCase()]) return [COUNTRY_LANG[cc[1].toLowerCase()]];
+  return ['und'];
 }
 
 // ---------- Netwerk ----------
@@ -201,7 +278,7 @@ function liveItem(e, tab, src, srcName) {
   return {
     uid: uid(), kind: 'live', tab, src, srcName, title: cleanName(e.name) || 'Kanaal',
     poster: e.attrs['tvg-logo'] || '', logo: true, url, statusKey: url,
-    group: e.attrs['group-title'] || '',
+    group: e.attrs['group-title'] || '', langs: entryLangs(e),
     check: e.opts && !ENV.native ? async () => 'dead' : () => probe(url),
   };
 }
@@ -217,18 +294,33 @@ function addRow(row) {
   scheduleRender();
 }
 
+let iptvLangMap = null;
+function iptvLangs() {
+  if (!iptvLangMap) iptvLangMap = http('https://iptv-org.github.io/iptv/index.language.m3u', { timeout: 45000 }).then(t => {
+    const m = new Map();
+    for (const e of parseM3U(t)) { const c = normLang(e.attrs['group-title']); if (!c) continue; if (!m.has(e.url)) m.set(e.url, []); m.get(e.url).push(c); }
+    return m;
+  }).catch(() => new Map());
+  return iptvLangMap;
+}
 async function loadBuiltinM3U(b) {
-  const text = await http(b.url);
+  const [text, lmap] = await Promise.all([http(b.url), iptvLangs()]);
   const entries = parseM3U(text);
-  const items = entries.map(e => liveItem(e, b.tab, b.id, b.name));
+  const items = entries.map(e => { const it = liveItem(e, b.tab, b.id, b.name); const l = lmap.get(e.url); if (l) it.langs = uniq(l); return it; });
   const title = { film: 'Live filmkanalen', series: 'Live seriekanalen', live: 'Gratis zenders' }[b.tab];
   addRow({ id: b.id, tab: b.tab, title: `${title} · ${b.name.split('· ')[1]}`, items, src: b.id });
 }
 
 // Internet Archive
+function archiveLangQuery() {
+  const sel = (state.settings.langs || []).filter(c => LANGS[c]);
+  if (!sel.length) return '';
+  const terms = uniq(sel.flatMap(c => [c, ...LANGS[c]].map(t => /\s/.test(t) ? `"${t}"` : t)));
+  return ` AND language:(${terms.join(' OR ')})`;
+}
 function archiveSearchURL(q, page) {
-  const p = new URLSearchParams({ q: `(${q}) AND mediatype:movies AND NOT access-restricted-item:true`, rows: '40', page: String(page), output: 'json' });
-  ['identifier', 'title', 'year', 'description', 'runtime'].forEach(f => p.append('fl[]', f));
+  const p = new URLSearchParams({ q: `(${q}) AND mediatype:movies AND NOT access-restricted-item:true${archiveLangQuery()}`, rows: '40', page: String(page), output: 'json' });
+  ['identifier', 'title', 'year', 'description', 'runtime', 'language'].forEach(f => p.append('fl[]', f));
   p.append('sort[]', 'downloads desc');
   return 'https://archive.org/advancedsearch.php?' + p;
 }
@@ -262,6 +354,7 @@ function archiveItem(d, tab) {
     srcName: 'Internet Archive', title: Array.isArray(d.title) ? d.title[0] : d.title, year: d.year,
     desc: desc.replace(/<[^>]+>/g, ' ').replace(/\s+\n/g, '\n').trim(),
     poster: `https://archive.org/services/img/${encodeURIComponent(id)}`, archiveId: id, statusKey: 'ia:' + id,
+    langs: (l => (l.length ? l : ['und']))(uniq([].concat(d.language || []).flatMap(x => String(x).split(/[;,/]| and /)).map(normLang))),
     check: async () => ((await archiveFiles(id)).list.length ? 'ok' : 'dead'),
   };
 }
@@ -303,7 +396,7 @@ async function loadM3USub(sub) {
       const show = m[1].trim() || name, key = g + '|' + show;
       let it = shows.get(key);
       if (!it) {
-        it = { uid: uid(), kind: 'series', tab: 'series', src: sub.id, srcName: sub.name, sub: true, title: show,
+        it = { uid: uid(), kind: 'series', tab: 'series', src: sub.id, srcName: sub.name, sub: true, title: show, langs: entryLangs(e),
           poster: e.attrs['tvg-logo'] || '', episodes: [], group: g };
         shows.set(key, it); put('series', g, it);
       }
@@ -311,7 +404,7 @@ async function loadM3USub(sub) {
       continue;
     }
     put(tab, g, { uid: uid(), kind: tab === 'film' ? 'film' : 'series', tab, src: sub.id, srcName: sub.name, sub: true,
-      title: name, poster: e.attrs['tvg-logo'] || '', url: e.url, group: g });
+      title: name, poster: e.attrs['tvg-logo'] || '', url: e.url, group: g, langs: entryLangs(e) });
   }
   // Steekproef per groep: werken een paar streams, dan is de groep beschikbaar.
   for (const [k, items] of groups) {
@@ -358,7 +451,10 @@ async function loadXtream(sub) {
   const catName = (cats, id) => ((cats || []).find(c => String(c.category_id) === String(id)) || {}).category_name || 'Overig';
   const bucket = (list, cats, mk, tab) => {
     const m = new Map();
-    for (const s of list || []) { const g = catName(cats, s.category_id); if (!m.has(g)) m.set(g, []); m.get(g).push(mk(s)); }
+    for (const s of list || []) {
+      const g = catName(cats, s.category_id); if (!m.has(g)) m.set(g, []);
+      const it = mk(s); const l = labelLangs(g, s.name); it.langs = l.length ? l : ['und']; m.get(g).push(it);
+    }
     for (const [g, items] of m) addRow({ id: `${sub.id}-${tab}-${g}`, tab, title: g, items, src: sub.id, sub: true });
   };
   // Account is actief → films en series van de provider gelden als beschikbaar.
@@ -446,7 +542,8 @@ function rowVisibleItems(row) {
   }
   return row.items.filter(it => row.gate ? true : visible(it));
 }
-const matches = it => !state.q || it.title.toLowerCase().includes(state.q);
+const langOk = it => { const sel = state.settings.langs || []; return !sel.length || (it.langs || ['und']).some(l => sel.includes(l)); };
+const matches = it => langOk(it) && (!state.q || it.title.toLowerCase().includes(state.q));
 
 const rank = r => (r.sub ? 0 : r.src.startsWith('archive') ? 1 : 2);
 function render() {
@@ -496,7 +593,45 @@ function render() {
       'Nog niets beschikbaar. Voeg een abonnement toe of zet bronnen aan via ⚙.';
   }
   if (!$('#gridView').hidden && gridState.row) renderGrid();
+  renderLangs();
 }
+
+// ---------- Taalfilter ----------
+function renderLangs() {
+  const sel = state.settings.langs;
+  const btn = $('#btnLang');
+  btn.classList.toggle('on', sel.length > 0);
+  $('#langLabel').textContent = !sel.length ? 'Alle talen' : sel.length <= 2 ? sel.map(langName).join(', ') : `${sel.length} talen`;
+  if ($('#langPop').hidden) return;
+  // tel beschikbare items per taal in het huidige tabblad (zonder taalfilter)
+  const counts = new Map();
+  for (const r of state.rows) {
+    if (r.tab !== state.tab) continue;
+    for (const it of rowVisibleItems(r)) for (const l of uniq(it.langs || ['und'])) counts.set(l, (counts.get(l) || 0) + 1);
+  }
+  for (const l of sel) if (!counts.has(l)) counts.set(l, 0);
+  const pinned = ['nl', 'en'];
+  const list = [...counts.entries()].sort((a, b) =>
+    (pinned.includes(b[0]) - pinned.includes(a[0])) || (a[0] === 'und') - (b[0] === 'und') || b[1] - a[1]);
+  $('#langList').innerHTML = list.map(([c, n]) => `<label class="lang"><input type="checkbox" value="${c}" ${sel.includes(c) ? 'checked' : ''}>
+    <span>${esc(langName(c))}</span><span class="c">${n}</span></label>`).join('') || '<p class="hint">Nog geen talen gevonden.</p>';
+}
+let langT;
+function setLangs(langs) {
+  state.settings.langs = langs; saveSettings(); render();
+  // Internet Archive opnieuw doorzoeken in de gekozen taal
+  clearTimeout(langT);
+  langT = setTimeout(() => {
+    state.rows = state.rows.filter(r => !r.src.startsWith('archive'));
+    for (const b of BUILTIN) if (b.type === 'archive' && state.settings.builtin[b.id]) track(b.name, () => loadArchive(b.tab, b.id));
+    scheduleRender();
+  }, 700);
+}
+$('#btnLang').onclick = e => { e.stopPropagation(); const p = $('#langPop'); p.hidden = !p.hidden; renderLangs(); };
+$('#langPop').addEventListener('click', e => e.stopPropagation());
+$('#langList').addEventListener('change', () => setLangs([...document.querySelectorAll('#langList input:checked')].map(i => i.value)));
+$('#langClear').onclick = () => setLangs([]);
+document.addEventListener('click', () => { $('#langPop').hidden = true; });
 
 // lazy: start controle voor items van huidig tabblad
 function enqueueTab() { for (const r of state.rows) if (r.tab === state.tab) { if (r.gate) enqueue(r.gate, true); r.items.forEach(it => enqueue(it)); } }
@@ -535,7 +670,7 @@ async function openDetail(it) {
   $('#dPoster').src = it.poster || 'icons/icon-512.png';
   $('#dPoster').style.objectFit = it.logo ? 'contain' : 'cover';
   $('#dBg').style.backgroundImage = it.poster ? `url("${it.poster}")` : '';
-  const meta = [it.kind === 'live' ? '🔴 Live' : it.kind === 'film' ? 'Film' : 'Serie', it.year, it.rating ? '★ ' + it.rating : '', it.group, it.srcName].filter(Boolean);
+  const meta = [it.kind === 'live' ? '🔴 Live' : it.kind === 'film' ? 'Film' : 'Serie', it.year, it.rating ? '★ ' + it.rating : '', (it.langs || []).filter(l => l !== 'und').map(langName).join(' / '), it.group, it.srcName].filter(Boolean);
   $('#dMeta').innerHTML = meta.map(m => `<span>${esc(m)}</span>`).join('');
   $('#dDesc').textContent = it.desc || '';
   $('#dEpisodes').innerHTML = '';
@@ -729,13 +864,14 @@ let qT; $('#q').addEventListener('input', e => { clearTimeout(qT); qT = setTimeo
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape' && e.key !== 'GoBack' && e.key !== 'BrowserBack') return;
   if (!$('#player').hidden) return stopPlayback();
+  if (!$('#langPop').hidden) { $('#langPop').hidden = true; return; }
   for (const id of ['detail', 'settings', 'gridView']) if (!$('#' + id).hidden) { $('#' + id).hidden = true; return; }
 });
 // Android terugknop (Capacitor)
 document.addEventListener('backbutton', () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
 if (ENV.cap && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
   window.Capacitor.Plugins.App.addListener('backButton', () => {
-    const open = !$('#player').hidden || ['detail', 'settings', 'gridView'].some(id => !$('#' + id).hidden);
+    const open = !$('#player').hidden || !$('#langPop').hidden || ['detail', 'settings', 'gridView'].some(id => !$('#' + id).hidden);
     if (open) document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); else window.Capacitor.Plugins.App.exitApp();
   });
 }

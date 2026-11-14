@@ -19,6 +19,14 @@
     <button data-tab="live" hidden>Live TV</button>
   </nav>
   <div class="search"><input id="q" type="search" placeholder="Zoeken…" autocomplete="off"></div>
+  <div class="langwrap">
+    <button class="langbtn" id="btnLang" title="Filter op taal">🌐 <span id="langLabel">Alle talen</span></button>
+    <div class="pop" id="langPop" hidden>
+      <div class="pop-head"><strong>Taal</strong><button class="linkbtn" id="langClear">Alle talen</button></div>
+      <div id="langList"></div>
+      <p class="hint">Gratis films/series van Internet Archive worden opnieuw gezocht in de gekozen taal.</p>
+    </div>
+  </div>
   <button class="iconbtn" id="btnSettings" title="Instellingen &amp; abonnementen">⚙</button>
 </header>
 

@@ -15,6 +15,7 @@ Alleen streams die echt werken worden getoond; de rest blijft verborgen (aan te 
   Films, series (met seizoenen/afleveringen) en zenders worden automatisch ingedeeld.
   Een verlopen of niet-werkend abonnement toont niets.
 - **Beschikbaarheidscheck:** elke stream wordt op de achtergrond getest; resultaten worden 6 uur onthouden.
+- **Taalfilter** (🌐): kies één of meer talen; ook abonnementen worden herkend aan labels als `NL |`, `[DE]`, `UK:`
 - Zoeken, detailpagina's, automatisch volgende aflevering, "Kopieer link" voor VLC.
 
 ## Installeren
