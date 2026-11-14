@@ -57,6 +57,9 @@ const state = {
 };
 if (!Array.isArray(state.settings.langs)) state.settings.langs = [];
 if (!('scan' in state.settings)) state.settings.scan = false;
+state.settings.cache = Object.assign({ on: false, ttl: 6 * 3600e3 }, state.settings.cache || {});
+state.settings.grid = Object.assign({ sort: 'pop', decade: '', rating: 0 }, state.settings.grid || {});
+if (!('omdbKey' in state.settings)) state.settings.omdbKey = '';
 if (state.settings.langs.length) setTimeout(() => applyIptvLangs(), 0);
 state.settings.ext = Object.assign({ always: false, app: 'chooser', pkg: '', winPath: '', winArgs: '' }, state.settings.ext || {});
 for (const b of BUILTIN) if (!(b.id in state.settings.builtin)) state.settings.builtin[b.id] = b.on;
@@ -158,6 +161,37 @@ async function http(url, { type = 'text', timeout = 20000, headers } = {}) {
   return type === 'json' ? r.json() : r.text();
 }
 
+// ---------- Cache (optioneel, IndexedDB) ----------
+const IDB = (() => {
+  let p;
+  const open = () => p || (p = new Promise((res, rej) => {
+    const r = indexedDB.open('kijkdoos', 1);
+    r.onupgradeneeded = () => ['http', 'avail', 'omdb'].forEach(n => r.result.objectStoreNames.contains(n) || r.result.createObjectStore(n));
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  }));
+  const run = async (store, mode, fn) => {
+    const db = await open();
+    return new Promise((res, rej) => { const t = db.transaction(store, mode); const q = fn(t.objectStore(store)); t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error); });
+  };
+  return {
+    get: (st, k) => run(st, 'readonly', o => o.get(k)).catch(() => undefined),
+    set: (st, k, v) => run(st, 'readwrite', o => o.put(v, k)).catch(() => {}),
+    clear: st => run(st, 'readwrite', o => o.clear()).catch(() => {}),
+    entries: async st => { try { const db = await open(); return await new Promise(res => { const out = [], c = db.transaction(st).objectStore(st).openCursor();
+      c.onsuccess = () => { const cur = c.result; if (cur) { out.push([cur.key, cur.value]); cur.continue(); } else res(out); }; c.onerror = () => res(out); }); } catch { return []; } },
+  };
+})();
+const cacheOn = () => !!state.settings.cache.on;
+const cacheTTL = () => +state.settings.cache.ttl || 6 * 3600e3;
+/** Index ophalen (playlists, catalogus); met cache aan eerst uit de cache. */
+async function httpIndex(url, opts = {}) {
+  const key = (opts.type || 'text') + ':' + url;
+  if (cacheOn()) { const c = await IDB.get('http', key); if (c && Date.now() - c.t < cacheTTL()) return c.v; }
+  const v = await http(url, opts);
+  if (cacheOn()) IDB.set('http', key, { v, t: Date.now() });
+  return v;
+}
+
 const isHls = url => /\.m3u8(\?|$)/i.test(url) || /\/live\/[^/]+\/[^/]+\/\d+$/.test(url);
 const mixedBlocked = url => ENV.https && !ENV.native && /^http:/i.test(url) && !state.settings.proxy;
 
@@ -193,12 +227,12 @@ function playableStatus(s, url) {
 // Realtime: alleen kaarten die in beeld zijn worden gecontroleerd, en niets wordt op het apparaat bewaard.
 const avail = new Map();            // statusKey -> {s, t}; alleen tijdens deze sessie
 const FRESH = 10 * 60e3;            // na 10 minuten opnieuw controleren
-function setStatus(key, s) { avail.set(key, { s, t: Date.now() }); }
+function setStatus(key, s) { const v = { s, t: Date.now() }; avail.set(key, v); if (cacheOn()) IDB.set('avail', key, v); }
 /** status van een item: 'ok' | 'dead' | null (nog onbekend) */
 function itemStatus(it) {
   if (it.status) return it.status;
   const a = it.statusKey && avail.get(it.statusKey);
-  if (a && Date.now() - a.t < FRESH) return playableStatus(a.s, it.url || '') ? 'ok' : 'dead';
+  if (a && Date.now() - a.t < (cacheOn() ? cacheTTL() : FRESH)) return playableStatus(a.s, it.url || '') ? 'ok' : 'dead';
   return null;
 }
 const scanOn = () => !!state.settings.scan;
@@ -262,6 +296,12 @@ function classify(e) {
   return 'live';
 }
 
+const yearFrom = n => { const m = String(n || '').match(/\b(19\d{2}|20[0-4]\d)\b/); return m ? +m[1] : ''; };
+const num = v => { const n = parseFloat(v); return isFinite(n) && n > 0 ? n : null; };
+/** titel zonder taal-/kwaliteitslabels en jaartal, voor het opzoeken van beoordelingen */
+const cleanTitle = t => String(t || '').replace(/^\s*[\[(|]?\s*[A-Za-z]{2,3}\s*[\])|:\-–•]\s*/, '').replace(/\((19|20)\d{2}\)|\b(19|20)\d{2}\b/g, '')
+  .replace(/\b(4k|uhd|fhd|hd|sd|1080p|720p|multi|sub|dub|nl ?sub)\b/gi, '').replace(/[\[\]()|]+/g, ' ').replace(/\s+/g, ' ').trim();
+
 let uidN = 0;
 const uid = () => 'i' + (++uidN);
 
@@ -296,7 +336,7 @@ function applyIptvLangs() {
   });
 }
 function iptvLangs() {
-  if (!iptvLangMap) iptvLangMap = http('https://iptv-org.github.io/iptv/index.language.m3u', { timeout: 45000 }).then(t => {
+  if (!iptvLangMap) iptvLangMap = httpIndex('https://iptv-org.github.io/iptv/index.language.m3u', { timeout: 45000 }).then(t => {
     const m = new Map();
     for (const e of parseM3U(t)) { const c = normLang(e.attrs['group-title']); if (!c) continue; if (!m.has(e.url)) m.set(e.url, []); m.get(e.url).push(c); }
     return m;
@@ -304,7 +344,7 @@ function iptvLangs() {
   return iptvLangMap;
 }
 async function loadBuiltinM3U(b) {
-  const entries = parseM3U(await http(b.url));
+  const entries = parseM3U(await httpIndex(b.url));
   const items = entries.map(e => liveItem(e, b.tab, b.id, b.name));
   if (iptvLangsApplied) iptvLangs().then(m => items.forEach(it => { const l = m.get(it.url); if (l) it.langs = uniq(l); }));
   const title = { film: 'Live filmkanalen', series: 'Live seriekanalen', live: 'Gratis zenders' }[b.tab];
@@ -318,11 +358,20 @@ function archiveLangQuery() {
   const terms = uniq(sel.flatMap(c => [c, ...LANGS[c]].map(t => /\s/.test(t) ? `"${t}"` : t)));
   return ` AND language:(${terms.join(' OR ')})`;
 }
+const IA_FIELDS = ['identifier', 'title', 'year', 'language', 'downloads', 'avg_rating', 'num_reviews', 'subject'];
+const IA_PAGE = 100;
+const archiveQuery = q => `(${q}) AND mediatype:movies AND NOT access-restricted-item:true${archiveLangQuery()}`;
 function archiveSearchURL(q, page) {
-  const p = new URLSearchParams({ q: `(${q}) AND mediatype:movies AND NOT access-restricted-item:true${archiveLangQuery()}`, rows: '40', page: String(page), output: 'json' });
-  ['identifier', 'title', 'year', 'description', 'runtime', 'language'].forEach(f => p.append('fl[]', f));
+  const p = new URLSearchParams({ q: archiveQuery(q), rows: String(IA_PAGE), page: String(page), output: 'json' });
+  [...IA_FIELDS, 'description'].forEach(f => p.append('fl[]', f));
   p.append('sort[]', 'downloads desc');
   return 'https://archive.org/advancedsearch.php?' + p;
+}
+/** Scrape-API: haalt een complete collectie op in blokken van 5000 */
+function archiveScrapeURL(q, cursor) {
+  const p = new URLSearchParams({ q: archiveQuery(q), fields: IA_FIELDS.join(','), count: '5000' });
+  if (cursor) p.set('cursor', cursor);
+  return 'https://archive.org/services/search/v1/scrape?' + p;
 }
 const archiveCache = new Map();
 async function archiveFiles(id) {
@@ -351,7 +400,9 @@ function archiveItem(d, tab) {
   const desc = Array.isArray(d.description) ? d.description.join('\n') : (d.description || '');
   return {
     uid: uid(), kind: tab === 'film' ? 'film' : 'series', tab, src: tab === 'film' ? 'archive-films' : 'archive-tv',
-    srcName: 'Internet Archive', title: Array.isArray(d.title) ? d.title[0] : d.title, year: d.year,
+    srcName: 'Internet Archive', title: String(Array.isArray(d.title) ? d.title[0] : d.title || id), year: yearFrom(d.year),
+    rating10: d.avg_rating ? Math.round(+d.avg_rating * 20) / 10 : null, votes: +d.num_reviews || 0, pop: +d.downloads || 0,
+    genres: uniq([].concat(d.subject || []).flatMap(x => String(x).split(/[;,]/)).map(g => g.trim().toLowerCase()).filter(g => g.length > 2 && g.length < 24)).slice(0, 6),
     desc: desc.replace(/<[^>]+>/g, ' ').replace(/\s+\n/g, '\n').trim(),
     poster: `https://archive.org/services/img/${encodeURIComponent(id)}`, archiveId: id, statusKey: 'ia:' + id,
     langs: (l => (l.length ? l : ['und']))(uniq([].concat(d.language || []).flatMap(x => String(x).split(/[;,/]| and /)).map(normLang))),
@@ -361,16 +412,36 @@ function archiveItem(d, tab) {
 async function loadArchive(tab, srcId) {
   const defs = ARCHIVE_ROWS[tab];
   await Promise.all(defs.map(async ([title, q], i) => {
-    const row = { id: `${srcId}-${i}`, tab, title: `${title} · gratis`, items: [], src: srcId, page: 0 };
-    row.more = async () => {
-      row.page++;
-      const j = await http(archiveSearchURL(q, row.page), { type: 'json' });
-      const docs = (j.response && j.response.docs) || [];
+    const row = { id: `${srcId}-${i}`, tab, title: `${title} · gratis`, items: [], src: srcId, page: 0, total: 0 };
+    const add = docs => {
       const seen = new Set(row.items.map(x => x.archiveId));
-      const fresh = docs.filter(d => !seen.has(d.identifier)).map(d => archiveItem(d, tab));
-      row.items.push(...fresh);
-      row.done = docs.length < 40;
+      const fresh = docs.filter(d => d && d.identifier && !seen.has(d.identifier)).map(d => archiveItem(d, tab));
+      row.items.push(...fresh); return fresh.length;
+    };
+    row.more = async () => {
+      if (row.complete) return;
+      row.page++;
+      const j = await httpIndex(archiveSearchURL(q, row.page), { type: 'json' });
+      const docs = (j.response && j.response.docs) || [];
+      row.total = (j.response && j.response.numFound) || row.total;
+      add(docs);
+      row.done = docs.length < IA_PAGE || row.items.length >= row.total;
       row.ver = (row.ver || 0) + 1;
+      scheduleRender();
+    };
+    /** Hele categorie inladen (alle titels, niet alleen de eerste pagina) */
+    row.loadAll = async progress => {
+      if (row.complete) return;
+      let cursor = null;
+      do {
+        const j = await httpIndex(archiveScrapeURL(q, cursor), { type: 'json', timeout: 90000 });
+        add(j.items || []);
+        row.total = Math.max(j.total || 0, row.items.length);
+        cursor = j.cursor || null;
+        row.ver = (row.ver || 0) + 1;
+        progress && progress(row.items.length, row.total);
+      } while (cursor);
+      row.complete = row.done = true; row.total = row.items.length;
       scheduleRender();
     };
     try { await row.more(); addRow(row); } catch (e) { console.warn('archive', title, e); }
@@ -381,7 +452,7 @@ async function loadArchive(tab, srcId) {
 const SXE = /^(.*?)[\s._\-:|]*S(\d{1,2})[\s._-]*E(\d{1,3})\b/i;
 
 async function loadM3USub(sub) {
-  const text = await http(sub.url, { timeout: 60000 });
+  const text = await httpIndex(sub.url, { timeout: 60000 });
   const entries = parseM3U(text);
   if (!entries.length) throw new Error('Lege of ongeldige playlist');
   const groups = new Map(); // key tab|group -> items
@@ -397,14 +468,14 @@ async function loadM3USub(sub) {
       let it = shows.get(key);
       if (!it) {
         it = { uid: uid(), kind: 'series', tab: 'series', src: sub.id, srcName: sub.name, sub: true, title: show, langs: entryLangs(e),
-          poster: e.attrs['tvg-logo'] || '', episodes: [], group: g };
+          poster: e.attrs['tvg-logo'] || '', episodes: [], group: g, year: yearFrom(show) };
         shows.set(key, it); put('series', g, it);
       }
       it.episodes.push({ season: +m[2], ep: +m[3], title: name, url: e.url, img: e.attrs['tvg-logo'] });
       continue;
     }
     put(tab, g, { uid: uid(), kind: tab === 'film' ? 'film' : 'series', tab, src: sub.id, srcName: sub.name, sub: true,
-      title: name, poster: e.attrs['tvg-logo'] || '', url: e.url, group: g, langs: entryLangs(e) });
+      title: name, poster: e.attrs['tvg-logo'] || '', url: e.url, group: g, langs: entryLangs(e), year: yearFrom(name) });
   }
   for (const [k, items] of groups) {
     const [tab, g] = k.split('\u0001');
@@ -436,7 +507,7 @@ async function loadXtream(sub) {
   if (u.status && u.status !== 'Active') throw new Error('Abonnement ' + u.status);
   if (u.exp_date && +u.exp_date * 1000 < Date.now()) throw new Error('Abonnement verlopen');
   const exp = u.exp_date ? ' · tot ' + new Date(+u.exp_date * 1000).toLocaleDateString('nl-NL') : '';
-  const getCats = async a => { try { return await http(x.api(a), { type: 'json' }); } catch { return []; } };
+  const getCats = async a => { try { return await httpIndex(x.api(a), { type: 'json', timeout: 60000 }); } catch { return []; } };
   const [vc, sc, lc, vod, ser, live] = await Promise.all([
     getCats('get_vod_categories'), getCats('get_series_categories'), getCats('get_live_categories'),
     getCats('get_vod_streams'), getCats('get_series'), getCats('get_live_streams'),
@@ -452,11 +523,13 @@ async function loadXtream(sub) {
   };
   // Account is actief → films en series van de provider gelden als beschikbaar.
   bucket(vod, vc, s => ({ uid: uid(), kind: 'film', tab: 'film', src: sub.id, srcName: sub.name, sub: true, status: 'ok',
-    title: s.name, poster: s.stream_icon || '', year: s.year || '', rating: s.rating,
+    title: s.name, poster: s.stream_icon || '', year: yearFrom(s.year) || yearFrom(s.name), added: +s.added || 0,
+    rating10: num(s.rating) || (num(s.rating_5based) ? num(s.rating_5based) * 2 : null), genres: s.genre ? String(s.genre).toLowerCase().split(/\s*[,/]\s*/).filter(Boolean) : [],
     url: x.movie(s.stream_id, s.container_extension) }), 'film');
   bucket(ser, sc, s => ({ uid: uid(), kind: 'series', tab: 'series', src: sub.id, srcName: sub.name, sub: true, status: 'ok',
-    title: s.name, poster: s.cover || '', year: (s.releaseDate || s.release_date || '').slice(0, 4), desc: s.plot || '',
-    rating: s.rating, xtreamSeries: s.series_id, subRef: sub }), 'series');
+    title: s.name, poster: s.cover || '', year: yearFrom(s.releaseDate || s.release_date) || yearFrom(s.name), desc: s.plot || '',
+    rating10: num(s.rating) || (num(s.rating_5based) ? num(s.rating_5based) * 2 : null), added: +s.last_modified || 0,
+    genres: s.genre ? String(s.genre).toLowerCase().split(/\s*[,/]\s*/).filter(Boolean) : [], xtreamSeries: s.series_id, subRef: sub }), 'series');
   bucket(live, lc, s => { const url = x.live(s.stream_id); return { uid: uid(), kind: 'live', tab: 'live', src: sub.id, srcName: sub.name, sub: true,
     title: s.name, poster: s.stream_icon || '', logo: true, url, statusKey: url, check: () => probe(url) }; }, 'live');
   return `${(vod || []).length} films · ${(ser || []).length} series · ${(live || []).length} zenders${exp}`;
@@ -515,7 +588,7 @@ function cardHTML(it) {
       ${checking ? '<span class="badge unk chk">controleren…</span>' : st === 'dead' ? '<span class="badge unk">offline</span>' : ''}
     </div>
     <div class="t">${esc(it.title)}</div>
-    <div class="s">${esc([it.year, it.kind === 'series' && it.episodes ? it.episodes.length + ' afl.' : '', it.srcName].filter(Boolean).join(' · '))}</div>
+    <div class="s">${esc([it.year, it.rating10 ? '★ ' + it.rating10.toFixed(1) : '', it.rt != null ? '🍅 ' + it.rt + '%' : '', it.kind === 'series' && it.episodes ? it.episodes.length + ' afl.' : '', it.srcName].filter(Boolean).join(' · '))}</div>
   </button>`;
 }
 // fallback als een thumbnail niet laadt
@@ -556,7 +629,7 @@ const rowRecs = new Map();
 let viewKey = '', heroUid = null;
 function makeRowRec(r) {
   const el = document.createElement('section'); el.className = 'row'; el.dataset.id = r.id;
-  el.innerHTML = `<div class="row-head"><h2>${esc(r.title)}</h2><span class="count"></span><button class="more" data-row="${esc(r.id)}">Alles ›</button></div><div class="strip"></div>`;
+  el.innerHTML = `<div class="row-head"><h2 class="rowlink" data-row="${esc(r.id)}" title="Hele categorie bekijken, sorteren en filteren">${esc(r.title)}</h2><span class="count"></span><button class="more" data-row="${esc(r.id)}">Alles ›</button></div><div class="strip"></div>`;
   const rec = { r, el, strip: $('.strip', el), list: [], shown: 0, ver: -1 };
   el._rec = rec; rowIO.observe(el);
   return rec;
@@ -567,7 +640,7 @@ function showMore(rec, n = CHUNK) {
   rec.shown += slice.length; observeCards(rec.strip);
   return true;
 }
-const countText = rec => `${rec.list.length}${rec.r.more && !rec.r.done ? '+' : ''}`;
+const countText = rec => (rec.r.total && !rec.r.complete && !state.q && !(state.settings.langs || []).length ? rec.r.total.toLocaleString('nl-NL') : `${rec.list.length}${rec.r.more && !rec.r.done ? '+' : ''}`);
 
 /** Status van één item veranderd: alleen die kaart(en) bijwerken, niets opnieuw tekenen. */
 function onStatus(it) {
@@ -692,26 +765,140 @@ async function loadMore(row) {
   row.loading = true; try { await row.more(); } catch {} finally { row.loading = false; }
 }
 
-// ---------- Raster ----------
-const gridState = { row: null, list: [], shown: 0 };
-function openGrid(row) { gridState.row = row; $('#gridTitle').textContent = row.title; $('#gridView').hidden = false; $('#gridView').scrollTop = 0; renderGrid(); }
+// ---------- Raster (categorie) met sorteren en filters ----------
+const SORTS = [
+  ['pop', 'Populair / standaard'], ['az', 'Titel A → Z'], ['za', 'Titel Z → A'],
+  ['yearDesc', 'Jaar: nieuwste eerst'], ['yearAsc', 'Jaar: oudste eerst'],
+  ['rating', 'Sterren: hoogste eerst'], ['ratingAsc', 'Sterren: laagste eerst'],
+  ['rt', 'Rotten Tomatoes: hoogste eerst'], ['added', 'Laatst toegevoegd'],
+];
+const coll = new Intl.Collator('nl', { numeric: true, sensitivity: 'base' });
+// sorteertitel: zonder taallabel ("NL | ") en lidwoord vooraan, getallen blijven staan
+const sortTitle = it => it._st || (it._st = String(it.title).replace(/^\s*[\[(|]?\s*[A-Za-z]{2,3}\s*[\])|:\-–•]\s*/, '').replace(/^(the|de|het|een|a|an)\s+/i, '').trim());
+const byTitle = (a, b) => coll.compare(sortTitle(a), sortTitle(b));
+function byNum(f, dir) { // ontbrekende waarden altijd achteraan
+  return (a, b) => { const x = f(a), y = f(b);
+    if (x == null && y == null) return byTitle(a, b); if (x == null) return 1; if (y == null) return -1;
+    return dir * (x - y) || byTitle(a, b); };
+}
+const score10 = it => it.rating10 || (it.rt != null ? it.rt / 10 : null);
+function sortItems(list, mode) {
+  const a = list.slice();
+  switch (mode) {
+    case 'az': return a.sort(byTitle);
+    case 'za': return a.sort((x, y) => byTitle(y, x));
+    case 'yearDesc': return a.sort(byNum(i => i.year || null, -1));
+    case 'yearAsc': return a.sort(byNum(i => i.year || null, 1));
+    case 'rating': return a.sort(byNum(score10, -1));
+    case 'ratingAsc': return a.sort(byNum(score10, 1));
+    case 'rt': return a.sort(byNum(i => i.rt, -1));
+    case 'added': return a.sort(byNum(i => i.added || null, -1));
+    default: return a.some(i => i.pop) ? a.sort(byNum(i => i.pop || null, -1)) : a;
+  }
+}
+const gridState = { row: null, list: [], shown: 0, genre: '', text: '', loading: false };
+function gridFilter(it) {
+  const g = state.settings.grid;
+  if (g.decade) { const d = +g.decade; if (!it.year || it.year < d || it.year > d + 9) return false; }
+  if (+g.rating) { const sc = score10(it); if (sc == null || sc < +g.rating) return false; }
+  if (gridState.genre && !(it.genres || []).includes(gridState.genre)) return false;
+  if (gridState.text && !it.title.toLowerCase().includes(gridState.text)) return false;
+  return true;
+}
+function fillGridTools(row) {
+  const items = row.items, g = state.settings.grid;
+  $('#gSort').innerHTML = SORTS.map(([v, n]) => `<option value="${v}" ${g.sort === v ? 'selected' : ''}>${n}</option>`).join('');
+  const decs = uniq(items.map(i => i.year ? Math.floor(i.year / 10) * 10 : null)).sort((a, b) => b - a);
+  $('#gDecade').innerHTML = '<option value="">Alle jaren</option>' + decs.map(d => `<option value="${d}" ${+g.decade === d ? 'selected' : ''}>${d}–${d + 9}</option>`).join('');
+  $('#gDecade').hidden = !decs.length;
+  $('#gRating').value = String(g.rating || 0);
+  const gc = new Map(); for (const i of items) for (const x of i.genres || []) gc.set(x, (gc.get(x) || 0) + 1);
+  const genres = [...gc.entries()].filter(e => e[1] > 1).sort((a, b) => b[1] - a[1]).slice(0, 40);
+  $('#gGenre').innerHTML = '<option value="">Alle genres</option>' + genres.map(([x, n]) => `<option value="${esc(x)}" ${gridState.genre === x ? 'selected' : ''}>${esc(x)} (${n})</option>`).join('');
+  $('#gGenre').hidden = !genres.length;
+}
+function gridInfo(extra = '') {
+  const row = gridState.row; if (!row) return;
+  const total = row.total || row.items.length;
+  $('#gInfo').innerHTML = `${gridState.list.length.toLocaleString('nl-NL')} titels` +
+    (row.complete || !row.loadAll ? '' : ` · ${row.items.length.toLocaleString('nl-NL')} van ${total.toLocaleString('nl-NL')} geladen`) + (extra ? ' · ' + extra : '');
+}
+async function openGrid(row) {
+  gridState.row = row; gridState.genre = ''; gridState.text = ''; $('#gText').value = '';
+  $('#gridTitle').textContent = row.title; $('#gridView').hidden = false; $('#gridView').scrollTop = 0;
+  fillGridTools(row); renderGrid();
+  if (row.loadAll && !row.complete) { // hele categorie ophalen
+    gridState.loading = true;
+    try {
+      await row.loadAll((n, t) => { if (gridState.row === row) { gridInfo(`laden… ${Math.round(n / Math.max(t, 1) * 100)}%`); } });
+    } catch (e) { toast('Niet alles kon worden geladen'); }
+    gridState.loading = false;
+    if (gridState.row !== row || $('#gridView').hidden) return;
+    fillGridTools(row);
+    if ($('#gridView').scrollTop < 400) renderGrid();
+    else $('#gInfo').innerHTML = `Alles geladen (${row.items.length.toLocaleString('nl-NL')}) · <button class="linkbtn" id="gRefresh">bijwerken</button>`;
+  }
+}
 function renderGrid() {
-  gridState.list = rowItems(gridState.row); gridState.shown = 0; $('#grid').innerHTML = '';
-  if (!gridMore()) $('#grid').innerHTML = '<div class="empty">Niets beschikbaar.</div>';
+  const row = gridState.row;
+  gridState.list = sortItems(rowItems(row).filter(gridFilter), state.settings.grid.sort); gridState.shown = 0;
+  $('#grid').innerHTML = '';
+  if (!gridMore()) $('#grid').innerHTML = `<div class="empty">${gridState.loading ? 'Laden…' : 'Niets gevonden met deze filters.'}</div>`;
+  gridInfo(gridState.loading ? 'laden…' : '');
 }
 function gridMore() {
   const s = gridState.list.slice(gridState.shown, gridState.shown + 60); if (!s.length) return false;
   $('#grid').insertAdjacentHTML('beforeend', s.map(cardHTML).join('')); gridState.shown += s.length; observeCards($('#grid'));
   return true;
 }
-$('#gridView').addEventListener('scroll', async e => {
+$('#gridView').addEventListener('scroll', e => {
   const g = e.currentTarget;
-  if (g.scrollTop + g.clientHeight < g.scrollHeight - 600 || gridState.busy) return;
-  if (gridMore()) return;
-  gridState.busy = true;
-  await loadMore(gridState.row);
-  gridState.list = rowItems(gridState.row); gridMore(); gridState.busy = false;
+  if (g.scrollTop + g.clientHeight > g.scrollHeight - 800) gridMore();
 });
+$('#gridTools').addEventListener('change', async e => {
+  const t = e.target, g = state.settings.grid;
+  if (t.id === 'gSort') { g.sort = t.value; if (g.sort === 'rt') await fetchRatings(gridState.list.length ? rowItems(gridState.row).filter(gridFilter) : []); }
+  if (t.id === 'gDecade') g.decade = t.value;
+  if (t.id === 'gRating') g.rating = +t.value;
+  if (t.id === 'gGenre') gridState.genre = t.value;
+  saveSettings(); renderGrid(); $('#gridView').scrollTop = 0;
+});
+let gT; $('#gText').addEventListener('input', e => { clearTimeout(gT); gT = setTimeout(() => { gridState.text = e.target.value.trim().toLowerCase(); renderGrid(); }, 200); });
+$('#gReset').onclick = () => { Object.assign(state.settings.grid, { decade: '', rating: 0 }); gridState.genre = ''; gridState.text = ''; $('#gText').value = ''; saveSettings(); fillGridTools(gridState.row); renderGrid(); };
+$('#gInfo').addEventListener('click', e => { if (e.target.id === 'gRefresh') { renderGrid(); $('#gridView').scrollTop = 0; } });
+
+// ---------- Beoordelingen (Rotten Tomatoes / IMDb via OMDb) ----------
+const omdbMem = new Map();
+async function omdb(it) {
+  const key = state.settings.omdbKey; if (!key || it.kind === 'live') return null;
+  const k = `${it.kind}|${cleanTitle(it.title).toLowerCase()}|${it.year || ''}`;
+  let r = omdbMem.get(k);
+  if (r === undefined && cacheOn()) { const c = await IDB.get('omdb', k); if (c && Date.now() - c.t < Math.max(cacheTTL(), 7 * 864e5)) r = c.v; }
+  if (r === undefined) {
+    const u = `https://www.omdbapi.com/?apikey=${encodeURIComponent(key)}&t=${encodeURIComponent(cleanTitle(it.title))}` +
+      (it.year ? `&y=${it.year}` : '') + `&type=${it.kind === 'film' ? 'movie' : 'series'}`;
+    const j = await http(u, { type: 'json', timeout: 12000 });
+    if (j.Response === 'False' && /limit|invalid api/i.test(j.Error || '')) throw new Error(j.Error);
+    const rt = (j.Ratings || []).find(x => x.Source === 'Rotten Tomatoes');
+    r = j.Response === 'False' ? { none: true } : { rt: rt ? parseInt(rt.Value) : null, imdb: num(j.imdbRating), plot: j.Plot && j.Plot !== 'N/A' ? j.Plot : '', genre: j.Genre && j.Genre !== 'N/A' ? j.Genre : '' };
+    omdbMem.set(k, r); if (cacheOn()) IDB.set('omdb', k, { v: r, t: Date.now() });
+  }
+  if (r && !r.none) {
+    it.rt = r.rt; if (!it.rating10 && r.imdb) it.rating10 = r.imdb;
+    if (!it.desc && r.plot) it.desc = r.plot;
+    if (r.genre && !(it.genres || []).length) it.genres = r.genre.toLowerCase().split(/\s*,\s*/);
+  } else it.rt = it.rt ?? null;
+  return r;
+}
+async function fetchRatings(list) {
+  if (!state.settings.omdbKey) {
+    toast('Vul eerst een gratis OMDb-sleutel in bij ⚙ → Beoordelingen', 4500); renderSettings(); $('#settings').hidden = false; return;
+  }
+  const todo = list.filter(i => i.kind !== 'live' && i.rt === undefined).slice(0, 400);
+  let done = 0, stop = false;
+  const worker = async () => { while (todo.length && !stop) { const it = todo.shift(); try { await omdb(it); } catch (e) { stop = true; toast('OMDb: ' + e.message, 5000); } done++; gridInfo(`🍅 ophalen ${done}/${done + todo.length}`); } };
+  await Promise.all([worker(), worker(), worker(), worker()]);
+}
 
 // ---------- Detail ----------
 async function openDetail(it) {
@@ -720,11 +907,17 @@ async function openDetail(it) {
   $('#dPoster').src = it.poster || 'icons/icon-512.png';
   $('#dPoster').style.objectFit = it.logo ? 'contain' : 'cover';
   $('#dBg').style.backgroundImage = it.poster ? `url("${it.poster}")` : '';
-  const meta = [it.kind === 'live' ? '🔴 Live' : it.kind === 'film' ? 'Film' : 'Serie', it.year, it.rating ? '★ ' + it.rating : '', (it.langs || []).filter(l => l !== 'und').map(langName).join(' / '), it.group, it.srcName].filter(Boolean);
+  const meta = [it.kind === 'live' ? '🔴 Live' : it.kind === 'film' ? 'Film' : 'Serie', it.year, it.rating10 ? '★ ' + it.rating10.toFixed(1) : '', it.rt != null ? '🍅 ' + it.rt + '%' : '', (it.genres || []).slice(0, 3).join(', '), (it.langs || []).filter(l => l !== 'und').map(langName).join(' / '), it.group, it.srcName].filter(Boolean);
   $('#dMeta').innerHTML = meta.map(m => `<span>${esc(m)}</span>`).join('');
   $('#dDesc').textContent = it.desc || '';
   $('#dEpisodes').innerHTML = '';
   const acts = $('#dActions'); acts.innerHTML = '';
+  if (state.settings.omdbKey && it.kind !== 'live' && it.rt === undefined) omdb(it).then(() => {
+    if ($('#detail').hidden || $('#dTitle').textContent !== it.title) return;
+    const extra = [it.rating10 ? '★ ' + it.rating10.toFixed(1) : '', it.rt != null ? '🍅 ' + it.rt + '%' : ''].filter(Boolean);
+    if (extra.length && !$('#dMeta').textContent.includes('🍅')) $('#dMeta').insertAdjacentHTML('afterbegin', extra.map(m => `<span>${esc(m)}</span>`).join(''));
+    if (!$('#dDesc').textContent && it.desc) $('#dDesc').textContent = it.desc;
+  }).catch(() => {});
   d.hidden = false;
 
   const btn = (label, cls, fn) => { const b = document.createElement('button'); b.className = 'btn ' + cls; b.textContent = label; b.onclick = fn; acts.appendChild(b); };
@@ -901,6 +1094,8 @@ $('#pClose').onclick = () => stopPlayback();
 // ---------- Instellingen ----------
 function renderSettings() {
   $('#setScan').checked = !!state.settings.scan;
+  $('#setCache').checked = cacheOn(); $('#setCacheTTL').value = String(cacheTTL()); $('#setCacheTTL').disabled = !cacheOn();
+  $('#setOmdb').value = state.settings.omdbKey || '';
   $('#setProxy').value = state.settings.proxy || '';
   const e = state.settings.ext, m = extMode();
   $('#setExtAlways').checked = !!e.always;
@@ -927,6 +1122,9 @@ function renderSettings() {
 
 $('#settings').addEventListener('change', e => {
   const t = e.target;
+  if (t.id === 'setCache') { state.settings.cache.on = t.checked; saveSettings(); renderSettings(); if (!t.checked) { IDB.clear('http'); IDB.clear('avail'); IDB.clear('omdb'); } toast(t.checked ? 'Cache aan' : 'Cache uit en geleegd — alles realtime'); }
+  if (t.id === 'setCacheTTL') { state.settings.cache.ttl = +t.value; saveSettings(); }
+  if (t.id === 'setOmdb') { state.settings.omdbKey = t.value.trim(); saveSettings(); omdbMem.clear(); }
   if (t.id === 'setScan') { state.settings.scan = t.checked; saveSettings(); render(); toast(t.checked ? 'Controle aan — alleen wat in beeld is' : 'Controle uit — alleen de index'); }
   if (t.dataset.b) { state.settings.builtin[t.dataset.b] = t.checked; saveSettings(); reloadSoon(); }
   if (t.id === 'setExtAlways') { state.settings.ext.always = t.checked; saveSettings(); }
@@ -973,7 +1171,8 @@ $('#btnWinBrowse').onclick = async () => {
   const p = await window.kdNative.browsePlayer(); if (p) { state.settings.ext.winPath = p; saveSettings(); renderSettings(); }
 };
 $('#btnExtTest').onclick = () => openExternal('https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8', 'Kijkdoos testbeeld');
-$('#btnRecheck').onclick = () => { avail.clear(); archiveCache.clear(); loadAll(); toast('Index wordt opnieuw geladen'); };
+$('#btnRecheck').onclick = () => { avail.clear(); archiveCache.clear(); IDB.clear('http'); IDB.clear('avail'); loadAll(); toast('Index wordt opnieuw geladen'); };
+$('#btnCacheClear').onclick = async () => { await Promise.all([IDB.clear('http'), IDB.clear('avail'), IDB.clear('omdb')]); avail.clear(); omdbMem.clear(); toast('Cache geleegd'); };
 let reloadT; function reloadSoon() { clearTimeout(reloadT); reloadT = setTimeout(loadAll, 600); }
 
 // ---------- Interactie ----------
@@ -982,7 +1181,7 @@ document.addEventListener('click', e => {
   const close = e.target.closest('[data-close]');
   if (close) { close.closest('.modal,.overlay').hidden = true; return; }
   if (e.target.classList.contains('modal')) { e.target.hidden = true; return; }
-  const more = e.target.closest('.more');
+  const more = e.target.closest('.more, .rowlink');
   if (more) { openGrid(state.rows.find(r => r.id === more.dataset.row)); return; }
   const c = e.target.closest('[data-uid]');
   if (c) { const it = itemIndex.get(c.dataset.uid); if (it) it.kind === 'live' && it.url ? playAuto(it.url, it.title, it) : openDetail(it); }
@@ -1017,4 +1216,7 @@ function hideSplash(ready) {
 setTimeout(() => hideSplash(true), 4000);
 if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !ENV.native) navigator.serviceWorker.register('sw.js').catch(() => {});
 window.KD = { state, parseM3U, classify, ENV }; // voor debuggen/tests
-loadAll();
+(async () => {
+  if (cacheOn()) { const now = Date.now(); for (const [k, v] of await IDB.entries('avail')) if (v && now - v.t < cacheTTL()) avail.set(k, v); }
+  loadAll();
+})();

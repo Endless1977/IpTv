@@ -42,6 +42,18 @@
 <!-- Raster (alles van één rij / zoekresultaten) -->
 <div class="overlay" id="gridView" hidden>
   <div class="ov-head"><button class="iconbtn" data-close>←</button><h2 id="gridTitle"></h2></div>
+  <div class="gtools" id="gridTools">
+    <input id="gText" type="search" placeholder="Zoek in categorie…" autocomplete="off">
+    <select id="gSort" title="Sorteren"></select>
+    <select id="gDecade" title="Jaartal"></select>
+    <select id="gRating" title="Minimale beoordeling">
+      <option value="0">Elke beoordeling</option><option value="5">★ 5+</option><option value="6">★ 6+</option>
+      <option value="7">★ 7+</option><option value="8">★ 8+</option><option value="9">★ 9+</option>
+    </select>
+    <select id="gGenre" title="Genre"></select>
+    <button class="btn" id="gReset" type="button">Filters wissen</button>
+    <span class="ginfo" id="gInfo"></span>
+  </div>
   <div class="grid" id="grid"></div>
 </div>
 
@@ -78,6 +90,17 @@
 
     <h3>Weergave</h3>
     <label class="toggle"><input type="checkbox" id="setScan"><span>Streams controleren<small>Aan: alleen wat in beeld is wordt getest; wat niet werkt verdwijnt. Uit: alleen de index laden (snelst).</small></span></label>
+
+    <h3>Cache</h3>
+    <label class="toggle"><input type="checkbox" id="setCache"><span>Cache gebruiken<small>Aan: index, beschikbaarheid en beoordelingen worden bewaard → sneller opstarten. Uit: alles realtime, niets bewaard.</small></span></label>
+    <div class="two"><select id="setCacheTTL" class="sel">
+      <option value="3600000">1 uur bewaren</option><option value="21600000">6 uur bewaren</option>
+      <option value="86400000">1 dag bewaren</option><option value="604800000">7 dagen bewaren</option>
+    </select><button class="btn" id="btnCacheClear" type="button">Cache legen</button></div>
+
+    <h3>Beoordelingen (Rotten Tomatoes)</h3>
+    <p class="hint">Rotten Tomatoes- en IMDb-scores komen via OMDb. Vraag een gratis sleutel aan op <a href="https://www.omdbapi.com/apikey.aspx" target="_blank" rel="noopener">omdbapi.com</a> (1000 opvragingen per dag) en vul hem hier in. Sterren van Internet Archive en je provider werken zonder sleutel.</p>
+    <input id="setOmdb" placeholder="OMDb API-sleutel" autocomplete="off">
 
     <h3>Gratis bronnen</h3>
     <div id="builtinList"></div>

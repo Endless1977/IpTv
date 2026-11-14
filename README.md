@@ -16,6 +16,11 @@ Standaard laadt Kijkdoos alleen de actuele index (snel, niets bewaard). Zet *Str
 - **Abonnementen:** Xtream Codes (server + gebruikersnaam + wachtwoord) of een M3U-link.
   Films, series (met seizoenen/afleveringen) en zenders worden automatisch ingedeeld.
   Een verlopen of niet-werkend abonnement toont niets.
+- **Hele categorie:** tik op een rijtitel of *Alles ›* — de complete categorie wordt geladen (ook duizenden titels).
+- **Sorteren:** populair, titel A→Z / Z→A, jaar nieuw/oud, sterren hoog/laag, Rotten Tomatoes, laatst toegevoegd.
+- **Filters:** zoeken binnen de categorie, decennium, minimale beoordeling, genre (+ het taalfilter).
+- **Beoordelingen:** sterren van Internet Archive en je provider; Rotten Tomatoes en IMDb via een gratis [OMDb-sleutel](https://www.omdbapi.com/apikey.aspx).
+- **Cache naar keuze:** uit = alles realtime; aan = index, beschikbaarheid en beoordelingen 1 uur – 7 dagen bewaren.
 - **Realtime controle (aan/uit):** alleen kaarten die in beeld zijn worden getest; geen voorladen en geen cache op het apparaat.
 - **Taalfilter** (🌐): kies één of meer talen; ook abonnementen worden herkend aan labels als `NL |`, `[DE]`, `UK:`
 - **Externe speler:** speel af in VLC, MX Player, Just Player, mpv, Kodi of TiviMate (Android) of in VLC, mpv, MPC-HC/BE, PotPlayer of elk ander programma (Windows). Kies per titel “↗” of zet *Altijd extern afspelen* aan.
