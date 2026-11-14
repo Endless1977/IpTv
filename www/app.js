@@ -638,8 +638,18 @@ function showMore(rec, n = CHUNK) {
   const slice = rec.list.slice(rec.shown, rec.shown + n); if (!slice.length) return false;
   rec.strip.insertAdjacentHTML('beforeend', slice.map(cardHTML).join(''));
   rec.shown += slice.length; observeCards(rec.strip);
+  const last = rec.strip.lastElementChild; if (last) stripEndIO.observe(last);
   return true;
 }
+// laatste kaart van een rij in beeld → volgende kaarten tekenen of meer ophalen
+const stripEndIO = new IntersectionObserver(es => {
+  for (const e of es) {
+    if (!e.isIntersecting) continue;
+    stripEndIO.unobserve(e.target);
+    const rowEl = e.target.closest('.row'), rec = rowEl && rowEl._rec;
+    if (rec && !showMore(rec)) loadMore(rec.r);
+  }
+}, { rootMargin: '0px 600px' });
 const countText = rec => (rec.r.total && !rec.r.complete && !state.q && !(state.settings.langs || []).length ? rec.r.total.toLocaleString('nl-NL') : `${rec.list.length}${rec.r.more && !rec.r.done ? '+' : ''}`);
 
 /** Status van één item veranderd: alleen die kaart(en) bijwerken, niets opnieuw tekenen. */
@@ -846,15 +856,23 @@ function renderGrid() {
   if (!gridMore()) $('#grid').innerHTML = `<div class="empty">${gridState.loading ? 'Laden…' : 'Niets gevonden met deze filters.'}</div>`;
   gridInfo(gridState.loading ? 'laden…' : '');
 }
+const GRID_CHUNK = 120;
 function gridMore() {
-  const s = gridState.list.slice(gridState.shown, gridState.shown + 60); if (!s.length) return false;
-  $('#grid').insertAdjacentHTML('beforeend', s.map(cardHTML).join('')); gridState.shown += s.length; observeCards($('#grid'));
-  return true;
+  const s = gridState.list.slice(gridState.shown, gridState.shown + GRID_CHUNK);
+  if (s.length) { $('#grid').insertAdjacentHTML('beforeend', s.map(cardHTML).join('')); gridState.shown += s.length; observeCards($('#grid')); }
+  const left = gridState.list.length - gridState.shown;
+  $('#gMore').hidden = left <= 0;
+  $('#gMore').textContent = `Meer tonen (${gridState.shown.toLocaleString('nl-NL')} van ${gridState.list.length.toLocaleString('nl-NL')})`;
+  return s.length > 0;
 }
+// Volgende titels tonen zodra het einde van het raster in beeld komt (werkt op touch, muis en afstandsbediening)
+const gridEndIO = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting) && !$('#gridView').hidden) gridMore(); }, { rootMargin: '1200px 0px' });
+gridEndIO.observe($('#gridEnd'));
+$('#gMore').onclick = () => gridMore();
 $('#gridView').addEventListener('scroll', e => {
   const g = e.currentTarget;
-  if (g.scrollTop + g.clientHeight > g.scrollHeight - 800) gridMore();
-});
+  if (g.scrollTop + g.clientHeight > g.scrollHeight - 1200) gridMore();
+}, { passive: true });
 $('#gridTools').addEventListener('change', async e => {
   const t = e.target, g = state.settings.grid;
   if (t.id === 'gSort') { g.sort = t.value; if (g.sort === 'rt') await fetchRatings(gridState.list.length ? rowItems(gridState.row).filter(gridFilter) : []); }
