@@ -12,7 +12,10 @@ Standaard laadt Kijkdoos alleen de actuele index (snel, niets bewaard). Zet *Str
 - **Films** en **Series** (en **Live TV** zodra er zenders zijn), Netflix-achtige rijen met thumbnails
 - **Gratis bronnen:**
   - Internet Archive — duizenden rechtenvrije speelfilms, tv-series en tekenfilms (on demand)
-  - iptv-org — openbaar beschikbare film-, serie-, klassieke en animatiekanalen + Nederlandse zenders
+  - [iptv-org/iptv](https://github.com/iptv-org/iptv) — rechtstreeks uit de originele repo. Kies via ⚙ → *Kanalen kiezen…* uit alle
+    categorieën, talen, landen (incl. provincies/steden), regio's en de bronbestanden per platform (Samsung TV Plus, Pluto TV, Rakuten, …).
+    De catalogus wordt live gelezen uit `PLAYLISTS.md` en `streams/` van iptv-org; `www/iptv-catalog-data.js` is alleen een reservekopie
+    (bijwerken: `node scripts/build-iptv-catalog.js <pad-naar-iptv-org/iptv>`).
 - **Abonnementen:** Xtream Codes (server + gebruikersnaam + wachtwoord) of een M3U-link.
   Films, series (met seizoenen/afleveringen) en zenders worden automatisch ingedeeld.
   Een verlopen of niet-werkend abonnement toont niets.
@@ -34,6 +37,8 @@ Standaard laadt Kijkdoos alleen de actuele index (snel, niets bewaard). Zet *Str
 | ![Detail](docs/screenshots/detail.png) | ![Taalfilter](docs/screenshots/taalfilter.png) |
 | **Live TV** | **Abonnementen & externe speler** |
 | ![Live TV](docs/screenshots/live-tv.png) | ![Instellingen](docs/screenshots/externe-speler.png) |
+| **iptv-org kanaalkiezer** | |
+| ![iptv-org](docs/screenshots/iptv-org-kiezer.png) | |
 
 <img src="docs/screenshots/mobiel.png" alt="Mobiel" width="280">
 

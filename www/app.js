@@ -20,12 +20,6 @@ const LS = {
 };
 
 const BUILTIN = [
-  { id: 'iptv-movies', name: 'iptv-org · Filmkanalen', desc: 'Gratis live filmkanalen wereldwijd', type: 'm3u', tab: 'film', url: 'https://iptv-org.github.io/iptv/categories/movies.m3u', on: true },
-  { id: 'iptv-series', name: 'iptv-org · Seriekanalen', desc: 'Gratis live seriekanalen wereldwijd', type: 'm3u', tab: 'series', url: 'https://iptv-org.github.io/iptv/categories/series.m3u', on: true },
-  { id: 'iptv-classic', name: 'iptv-org · Klassiekers', desc: 'Kanalen met klassieke films en tv', type: 'm3u', tab: 'film', url: 'https://iptv-org.github.io/iptv/categories/classic.m3u', on: true },
-  { id: 'iptv-animation', name: 'iptv-org · Animatie', desc: 'Tekenfilm- en animatiekanalen', type: 'm3u', tab: 'series', url: 'https://iptv-org.github.io/iptv/categories/animation.m3u', on: true },
-  { id: 'iptv-nl', name: 'iptv-org · Nederland', desc: 'Gratis Nederlandse zenders (Live TV)', type: 'm3u', tab: 'live', url: 'https://iptv-org.github.io/iptv/countries/nl.m3u', on: true },
-  { id: 'iptv-be', name: 'iptv-org · België', desc: 'Gratis Belgische zenders (Live TV)', type: 'm3u', tab: 'live', url: 'https://iptv-org.github.io/iptv/countries/be.m3u', on: false },
   { id: 'archive-films', name: 'Internet Archive · Films', desc: 'Duizenden rechtenvrije speelfilms (on demand)', type: 'archive', tab: 'film', on: true },
   { id: 'archive-tv', name: 'Internet Archive · Series', desc: 'Klassieke tv-series en tekenfilms (on demand)', type: 'archive', tab: 'series', on: true },
 ];
@@ -57,6 +51,12 @@ const state = {
 };
 if (!Array.isArray(state.settings.langs)) state.settings.langs = [];
 if (!('scan' in state.settings)) state.settings.scan = false;
+if (!Array.isArray(state.settings.iptvSel)) {
+  const b = state.settings.builtin || {};
+  const old = [['iptv-movies', 'categories/movies', 'Films'], ['iptv-series', 'categories/series', 'Series'], ['iptv-classic', 'categories/classic', 'Klassiek'],
+    ['iptv-animation', 'categories/animation', 'Animatie'], ['iptv-nl', 'countries/nl', 'Nederland'], ['iptv-be', 'countries/be', 'België']];
+  state.settings.iptvSel = old.filter(([id]) => (id in b ? b[id] : id !== 'iptv-be')).map(([, path, name]) => ({ path, name }));
+}
 state.settings.cache = Object.assign({ on: false, ttl: 6 * 3600e3 }, state.settings.cache || {});
 state.settings.grid = Object.assign({ sort: 'pop', decade: '', rating: 0 }, state.settings.grid || {});
 if (!('omdbKey' in state.settings)) state.settings.omdbKey = '';
@@ -331,7 +331,7 @@ let iptvLangMap = null, iptvLangsApplied = false;
 function applyIptvLangs() {
   if (iptvLangsApplied) return; iptvLangsApplied = true;
   track('Taal-index', () => iptvLangs()).then(m => {
-    for (const r of state.rows) if (r.src.startsWith('iptv-')) for (const it of r.items) { const l = m.get(it.url); if (l) it.langs = uniq(l); }
+    for (const r of state.rows) if (r.src.startsWith('iptv:')) for (const it of r.items) { const l = m.get(it.url); if (l) it.langs = uniq(l); }
     viewKey = ''; render();
   });
 }
@@ -343,12 +343,48 @@ function iptvLangs() {
   }).catch(() => new Map());
   return iptvLangMap;
 }
-async function loadBuiltinM3U(b) {
-  const entries = parseM3U(await httpIndex(b.url));
-  const items = entries.map(e => liveItem(e, b.tab, b.id, b.name));
+// ---------- iptv-org (originele bron: github.com/iptv-org/iptv) ----------
+const IPTV_BASE = 'https://iptv-org.github.io/iptv/';
+const IPTV_REPO_RAW = 'https://raw.githubusercontent.com/iptv-org/iptv/master/';
+const regionDN = (() => { try { return new Intl.DisplayNames(['nl'], { type: 'region' }); } catch { return null; } })();
+const regionName = cc => { try { return (regionDN && regionDN.of(cc.toUpperCase())) || cc.toUpperCase(); } catch { return cc.toUpperCase(); } };
+const iptvTab = path => ({ 'categories/movies': 'film', 'categories/classic': 'film', 'categories/series': 'series', 'categories/animation': 'series' })[path] || 'live';
+function iptvName(path, fallback) {
+  const [kind, code = ''] = path.split('/');
+  if (kind === 'categories') { const en = fallback || code.charAt(0).toUpperCase() + code.slice(1); return IptvCatalog.CAT_NL[en] || en; }
+  if (kind === 'countries') return regionName(code);
+  if (kind === 'sources') { const m = code.match(/^([a-z]{2})_(.+)$/); return m ? `${IptvCatalog.platformName(m[2])} · ${regionName(m[1])}` : code; }
+  return fallback || code;
+}
+let catalogP = null;
+/** Catalogus live uit de originele repo (PLAYLISTS.md + map streams/), met reservekopie */
+function getCatalog() {
+  if (catalogP) return catalogP;
+  catalogP = (async () => {
+    const fb = window.IPTV_CATALOG_FALLBACK || { playlists: { categories: [], languages: [], countries: [], regions: [] }, sources: [] };
+    const [md, files] = await Promise.all([
+      httpIndex(IPTV_REPO_RAW + 'PLAYLISTS.md', { timeout: 30000 }).catch(() => null),
+      httpIndex('https://api.github.com/repos/iptv-org/iptv/contents/streams', { type: 'json', timeout: 30000 }).catch(() => null),
+    ]);
+    let pl = null; try { pl = md && IptvCatalog.parsePlaylists(md); } catch {}
+    const live = !!(pl && pl.categories.length);
+    const src = Array.isArray(files) ? IptvCatalog.sourcesFromFiles(files.map(f => f.name)) : null;
+    return { ...(live ? pl : fb.playlists), sources: src && src.length ? src : fb.sources, live, liveSources: !!(src && src.length), date: fb.generated };
+  })();
+  catalogP.catch(() => { catalogP = null; });
+  return catalogP;
+}
+async function loadIptvPlaylist(sel) {
+  const tab = iptvTab(sel.path), src = 'iptv:' + sel.path;
+  const entries = parseM3U(await httpIndex(IPTV_BASE + sel.path + '.m3u', { timeout: 60000 }));
+  const items = entries.map(e => {
+    const it = liveItem(e, tab, src, 'iptv-org');
+    it.genres = uniq((e.attrs['group-title'] || '').split(';').map(g => g.trim().toLowerCase()).filter(g => g && g !== 'undefined'));
+    return it;
+  });
   if (iptvLangsApplied) iptvLangs().then(m => items.forEach(it => { const l = m.get(it.url); if (l) it.langs = uniq(l); }));
-  const title = { film: 'Live filmkanalen', series: 'Live seriekanalen', live: 'Gratis zenders' }[b.tab];
-  addRow({ id: b.id, tab: b.tab, title: `${title} · ${b.name.split('· ')[1]}`, items, src: b.id });
+  const prefix = { film: 'Live filmkanalen · ', series: 'Live seriekanalen · ', live: '' }[tab];
+  addRow({ id: src, tab, title: prefix + sel.name, items, src });
 }
 
 // Internet Archive
@@ -554,9 +590,9 @@ async function loadAll() {
   const jobs = [];
   for (const b of BUILTIN) {
     if (!state.settings.builtin[b.id]) continue;
-    if (b.type === 'm3u') jobs.push(track(b.name, () => loadBuiltinM3U(b)).catch(e => console.warn(b.id, e)));
-    else jobs.push(track(b.name, () => loadArchive(b.tab, b.id)).catch(e => console.warn(b.id, e)));
+    jobs.push(track(b.name, () => loadArchive(b.tab, b.id)).catch(e => console.warn(b.id, e)));
   }
+  for (const sel of state.settings.iptvSel) jobs.push(track(sel.name, () => loadIptvPlaylist(sel)).catch(e => console.warn(sel.path, e)));
   for (const s of state.subs) if (s.enabled !== false) jobs.push(loadSub(s));
   scheduleRender();
   await Promise.all(jobs);
@@ -1125,6 +1161,8 @@ function renderSettings() {
     $('#winFound').innerHTML = list.length ? 'Gevonden: ' + list.map(p => `<button class="linkbtn" data-wp="${esc(p.path)}">${esc(p.name)}</button>`).join(' · ') : 'Geen bekende speler gevonden — kies zelf een .exe.';
   }).catch(() => {});
   $('#webOnly').hidden = ENV.native;
+  const sel = state.settings.iptvSel;
+  $('#iptvSelInfo').textContent = sel.length ? `${sel.length} gekozen: ${sel.slice(0, 4).map(x => x.name).join(', ')}${sel.length > 4 ? '…' : ''}` : 'niets gekozen';
   $('#builtinList').innerHTML = BUILTIN.map(b => `<label class="toggle"><input type="checkbox" data-b="${b.id}" ${state.settings.builtin[b.id] ? 'checked' : ''}>
     <span>${esc(b.name)}<small>${esc(b.desc)}</small></span></label>`).join('');
   $('#subList').innerHTML = state.subs.length ? state.subs.map(s => {
@@ -1193,6 +1231,76 @@ $('#btnRecheck').onclick = () => { avail.clear(); archiveCache.clear(); IDB.clea
 $('#btnCacheClear').onclick = async () => { await Promise.all([IDB.clear('http'), IDB.clear('avail'), IDB.clear('omdb')]); avail.clear(); omdbMem.clear(); toast('Cache geleegd'); };
 let reloadT; function reloadSoon() { clearTimeout(reloadT); reloadT = setTimeout(loadAll, 600); }
 
+// ---------- iptv-org kanaalkiezer ----------
+const pick = { tab: 'categories', sel: new Map(), q: '', open: new Set(), cat: null };
+async function openPicker() {
+  pick.sel = new Map(state.settings.iptvSel.map(x => [x.path, x.name])); pick.q = ''; $('#pkSearch').value = '';
+  $('#iptvPicker').hidden = false; $('#pkList').innerHTML = '<div class="loading">Catalogus ophalen uit iptv-org/iptv…</div>';
+  try { pick.cat = await getCatalog(); } catch { pick.cat = null; }
+  const c = pick.cat;
+  $('#pkSrc').innerHTML = c && c.live ? 'Live gelezen uit de originele bron: <a href="https://github.com/iptv-org/iptv" target="_blank" rel="noopener">github.com/iptv-org/iptv</a> (PLAYLISTS.md' + (c.liveSources ? ' + streams/' : '') + ')'
+    : `Origineel niet bereikbaar — reservekopie van ${c ? c.date : '?'} wordt gebruikt.`;
+  renderPicker();
+}
+function pkRow(path, name, n, indent = 0, extra = '') {
+  return `<label class="pk" style="padding-left:${8 + indent * 22}px"><input type="checkbox" data-p="${esc(path)}" data-n="${esc(name)}" ${pick.sel.has(path) ? 'checked' : ''}>
+    <span>${esc(name)}</span>${extra}${n ? `<span class="c">${n.toLocaleString('nl-NL')}</span>` : ''}</label>`;
+}
+function renderPicker() {
+  const c = pick.cat, q = pick.q; if (!c) { $('#pkList').innerHTML = '<div class="empty">Catalogus niet beschikbaar.</div>'; return; }
+  const hit = s => !q || s.toLowerCase().includes(q);
+  document.querySelectorAll('#pkTabs button').forEach(b => b.classList.toggle('active', b.dataset.t === pick.tab));
+  let html = '';
+  if (pick.tab === 'categories') {
+    html = c.categories.map(x => ({ ...x, nl: iptvName(x.path, x.name) })).filter(x => hit(x.nl) || hit(x.name))
+      .sort((a, b) => a.nl.localeCompare(b.nl, 'nl')).map(x => pkRow(x.path, x.nl, x.n, 0,
+        iptvTab(x.path) !== 'live' ? `<span class="tag">${iptvTab(x.path) === 'film' ? 'Films' : 'Series'}</span>` : '')).join('');
+  } else if (pick.tab === 'languages') {
+    html = c.languages.map(x => ({ ...x, nl: (LANGS[normLang(x.name)] || [x.name])[0] })).filter(x => hit(x.nl) || hit(x.name))
+      .sort((a, b) => b.n - a.n).map(x => pkRow(x.path, x.nl === x.name ? x.name : `${x.nl} (${x.name})`, x.n)).join('');
+  } else if (pick.tab === 'countries') {
+    const list = c.countries.map(x => ({ ...x, nl: iptvName(x.path, x.name) })).sort((a, b) => a.nl.localeCompare(b.nl, 'nl'));
+    for (const x of list) {
+      const subs = x.subs.filter(s => hit(s.name)), self = hit(x.nl) || hit(x.name);
+      if (!self && !subs.length) continue;
+      const open = pick.open.has(x.path) || (q && subs.length);
+      const exp = x.subs.length ? `<button class="pk-exp" data-c="${esc(x.path)}" type="button">${open ? '▾' : '▸'} ${x.subs.length}</button>` : '';
+      html += pkRow(x.path, x.nl, 0, 0, exp);
+      if (open) html += (q ? subs : x.subs).map(s => pkRow(s.path, s.name, 0, s.lvl)).join('');
+    }
+  } else if (pick.tab === 'regions') {
+    html = c.regions.filter(x => hit(x.name)).map(x => pkRow(x.path, x.name, 0)).join('');
+  } else if (pick.tab === 'sources') {
+    const by = new Map();
+    for (const s of c.sources) { const pf = IptvCatalog.platformName(s.pf); if (!hit(pf) && !hit(regionName(s.cc))) continue; if (!by.has(pf)) by.set(pf, []); by.get(pf).push(s); }
+    html = [...by.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0])).map(([pf, list]) =>
+      `<div class="pk-h">${esc(pf)}</div>` + list.sort((a, b) => regionName(a.cc).localeCompare(regionName(b.cc), 'nl'))
+        .map(s => pkRow(s.path, iptvName(s.path), 0, 1)).join('')).join('');
+  }
+  $('#pkList').innerHTML = html || '<div class="empty">Niets gevonden.</div>';
+  $('#pkCount').textContent = `${pick.sel.size} gekozen`;
+}
+function applyPicker() {
+  $('#iptvPicker').hidden = true;
+  const before = state.settings.iptvSel.map(x => x.path).join('|');
+  state.settings.iptvSel = [...pick.sel.entries()].map(([path, name]) => ({ path, name }));
+  saveSettings(); renderSettings();
+  if (before === state.settings.iptvSel.map(x => x.path).join('|')) return;
+  const want = new Set(state.settings.iptvSel.map(x => x.path));
+  state.rows = state.rows.filter(r => !r.src.startsWith('iptv:') || want.has(r.src.slice(5)));
+  const have = new Set(state.rows.map(r => r.src));
+  for (const sel of state.settings.iptvSel) if (!have.has('iptv:' + sel.path)) track(sel.name, () => loadIptvPlaylist(sel)).catch(() => toast('Kon ' + sel.name + ' niet laden'));
+  scheduleRender(); toast(`${state.settings.iptvSel.length} iptv-org lijsten actief`);
+}
+$('#btnIptvPick').onclick = openPicker;
+$('#pkDone').onclick = applyPicker;
+$('#pkBack').onclick = applyPicker;
+$('#pkTabs').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { pick.tab = b.dataset.t; renderPicker(); $('#pkList').scrollTop = 0; } });
+let pkT; $('#pkSearch').addEventListener('input', e => { clearTimeout(pkT); pkT = setTimeout(() => { pick.q = e.target.value.trim().toLowerCase(); renderPicker(); }, 150); });
+$('#pkList').addEventListener('change', e => { const t = e.target; if (!t.dataset.p) return; t.checked ? pick.sel.set(t.dataset.p, t.dataset.n) : pick.sel.delete(t.dataset.p); $('#pkCount').textContent = `${pick.sel.size} gekozen`; });
+$('#pkList').addEventListener('click', e => { const b = e.target.closest('.pk-exp'); if (!b) return; e.preventDefault(); const k = b.dataset.c; pick.open.has(k) ? pick.open.delete(k) : pick.open.add(k); renderPicker(); });
+$('#pkNone').onclick = () => { pick.sel.clear(); renderPicker(); };
+
 // ---------- Interactie ----------
 $('#btnSettings').onclick = () => { renderSettings(); $('#settings').hidden = false; };
 document.addEventListener('click', e => {
@@ -1213,13 +1321,14 @@ document.addEventListener('keydown', e => {
   if (e.key !== 'Escape' && e.key !== 'GoBack' && e.key !== 'BrowserBack') return;
   if (!$('#player').hidden) return stopPlayback();
   if (!$('#langPop').hidden) { $('#langPop').hidden = true; return; }
+  if (!$('#iptvPicker').hidden) return applyPicker();
   for (const id of ['detail', 'settings', 'gridView']) if (!$('#' + id).hidden) { $('#' + id).hidden = true; return; }
 });
 // Android terugknop (Capacitor)
 document.addEventListener('backbutton', () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
 if (ENV.cap && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
   window.Capacitor.Plugins.App.addListener('backButton', () => {
-    const open = !$('#player').hidden || !$('#langPop').hidden || ['detail', 'settings', 'gridView'].some(id => !$('#' + id).hidden);
+    const open = !$('#player').hidden || !$('#langPop').hidden || !$('#iptvPicker').hidden || ['detail', 'settings', 'gridView'].some(id => !$('#' + id).hidden);
     if (open) document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); else window.Capacitor.Plugins.App.exitApp();
   });
 }

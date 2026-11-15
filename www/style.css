@@ -90,6 +90,23 @@ main{padding:6px 0 40px}
 .gtools .btn{padding:9px 14px}
 .ginfo{color:var(--mut);font-size:13px;margin-left:auto}
 .rowlink{cursor:pointer}
+.iptvsel{margin-top:8px}
+#iptvPicker{z-index:50}
+.pk-src{padding:0 18px;margin:0 0 8px}.pk-src a{color:var(--acc2)}
+.pk-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:0 18px 10px}
+.pk-tabs button{background:var(--bg3);border:0;padding:8px 14px;border-radius:999px;color:var(--mut);font-weight:600}
+.pk-tabs button.active{background:var(--fg);color:var(--bg)}
+.pk-bar{position:sticky;top:64px;z-index:1;display:flex;gap:12px;align-items:center;padding:4px 18px 10px;background:var(--bg)}
+.pk-bar input{max-width:320px}
+.pk-bar span{color:var(--mut);font-size:13px;margin-left:auto}
+.pk-list{padding:0 18px 40px;columns:3 300px;column-gap:24px}
+.pk{display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:8px;cursor:pointer;break-inside:avoid}
+.pk:hover{background:var(--bg2)}
+.pk input{width:18px;height:18px;accent-color:var(--acc);flex:none}
+.pk .c{margin-left:auto;color:var(--mut);font-size:12px}
+.pk .tag{font-size:10px;font-weight:800;background:var(--acc);color:#000;padding:1px 6px;border-radius:4px}
+.pk-exp{margin-left:auto;background:var(--bg3);border:0;border-radius:6px;padding:2px 8px;font-size:12px;color:var(--mut)}
+.pk-h{font-weight:800;color:var(--acc2);margin:14px 0 4px 8px;break-after:avoid}
 #gridEnd{height:1px}
 .gmore{display:flex;justify-content:center;padding:18px}
 .rowlink:hover{color:var(--acc2)}
@@ -154,6 +171,7 @@ main{padding:6px 0 40px}
   :root{--cardw:118px}
   .topbar{flex-wrap:wrap;gap:8px 10px;padding:8px 12px}
   .brand span{display:none}
+  .pk-bar{top:60px;padding:4px 12px 10px}.pk-list{padding:0 8px 40px}.pk-tabs{padding:0 12px 10px}
   .gtools{top:60px;padding:4px 12px 10px}.gtools input{width:100%}.gtools select{flex:1 1 45%;max-width:none}.ginfo{margin-left:0;flex-basis:100%}
   .search{order:5;flex:1 1 60%;max-width:none}
   .langwrap{order:6}

@@ -59,6 +59,19 @@
   <div class="gmore"><button class="btn" id="gMore" type="button" hidden>Meer tonen</button></div>
 </div>
 
+<!-- iptv-org kanaalkiezer -->
+<div class="overlay" id="iptvPicker" hidden>
+  <div class="ov-head"><button class="iconbtn" id="pkBack" type="button">←</button><h2>iptv-org kanalen</h2>
+    <button class="btn primary" id="pkDone" type="button" style="margin-left:auto">Klaar</button></div>
+  <p class="hint pk-src" id="pkSrc"></p>
+  <nav class="pk-tabs" id="pkTabs">
+    <button data-t="categories">Categorieën</button><button data-t="countries">Landen</button><button data-t="languages">Talen</button>
+    <button data-t="regions">Regio's</button><button data-t="sources">Platforms</button>
+  </nav>
+  <div class="pk-bar"><input id="pkSearch" type="search" placeholder="Zoeken…" autocomplete="off"><span id="pkCount"></span><button class="linkbtn" id="pkNone" type="button">Niets kiezen</button></div>
+  <div class="pk-list" id="pkList"></div>
+</div>
+
 <!-- Detail -->
 <div class="modal" id="detail" hidden>
   <div class="modal-card detail">
@@ -106,6 +119,8 @@
 
     <h3>Gratis bronnen</h3>
     <div id="builtinList"></div>
+    <div class="sub iptvsel"><div class="grow"><div class="nm">iptv-org <small style="color:var(--mut)">github.com/iptv-org/iptv</small></div>
+      <div class="st" id="iptvSelInfo"></div></div><button class="btn" id="btnIptvPick" type="button">Kanalen kiezen…</button></div>
 
     <h3>IPTV-abonnementen</h3>
     <div id="subList"></div>
@@ -159,6 +174,8 @@
 <div class="toast" id="toast" hidden></div>
 
 <script src="vendor/hls.min.js"></script>
+<script src="iptv-catalog.js"></script>
+<script src="iptv-catalog-data.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

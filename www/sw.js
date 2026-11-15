@@ -1,6 +1,6 @@
 // Kijkdoos service worker: app-shell offline, streams altijd via netwerk.
-const V = 'kijkdoos-v6';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'vendor/hls.min.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'img/wapen.png'];
+const V = 'kijkdoos-v7';
+const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'vendor/hls.min.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'img/wapen.png', 'iptv-catalog.js', 'iptv-catalog-data.js'];
 self.addEventListener('install', e => e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', e => {
